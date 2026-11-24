@@ -1,0 +1,6 @@
+{
+  "name": "Ki-Imóveis",
+  "description": "A premium real estate platform for Angola, inspired by Airbnb. Buy, rent, and book property visits with a clean, modern interface.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
