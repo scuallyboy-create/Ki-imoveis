@@ -199,11 +199,12 @@ export function ensureSeededLocalDb() {
       ])
     );
   }
-  // Ensure existing seeded admin profile always enforces management-only permissions
+  // Ensure existing seeded admin profile always enforces management-only permissions and exists
   try {
     const existingProfiles = JSON.parse(localStorage.getItem('offline_db_profiles') || '[]');
     if (Array.isArray(existingProfiles)) {
       let changed = false;
+      const hasAdmin = existingProfiles.some((p: any) => p?.email?.toLowerCase() === ADMIN_EMAIL);
       const repaired = existingProfiles.map((p: any) => {
         if (p?.email?.toLowerCase() === ADMIN_EMAIL && p?.permissions?.canPublishListings !== false) {
           changed = true;
@@ -215,9 +216,41 @@ export function ensureSeededLocalDb() {
         }
         return p;
       });
+      if (!hasAdmin) {
+        const now = Date.now();
+        repaired.unshift({
+          id: '7d7f0f6a-65ff-4b00-8fb3-e0bc5de09afb',
+          email: ADMIN_EMAIL,
+          displayName: 'Administrador Ki-Imóveis',
+          role: 'admin',
+          subscriptionPlan: 'gold',
+          licenseStatus: 'active',
+          licenseNumber: 'KI-ADM-0001',
+          licenseExpiresAt: now + 365 * 24 * 60 * 60 * 1000,
+          verified: true,
+          permissions: ADMIN_MANAGEMENT_PERMISSIONS,
+          phoneNumber: '+244 923 100 001',
+          address: 'Luanda, Talatona',
+          favorites: [],
+          createdAt: now - 30 * 24 * 60 * 60 * 1000,
+        });
+        changed = true;
+      }
       if (changed) {
         localStorage.setItem('offline_db_profiles', JSON.stringify(repaired));
       }
+    }
+  } catch {
+    // Safe ignore
+  }
+
+  // Ensure seeded admin credential hash is initialized for fallback login
+  try {
+    const credStore = JSON.parse(localStorage.getItem('offline_db_credentials') || '{}');
+    if (credStore && typeof credStore === 'object' && !credStore[ADMIN_EMAIL]) {
+      credStore[ADMIN_EMAIL] =
+        'ki_adm_2026_salt:c7c623ed162f45055b00358f97c78d7239b7e53ce0a02b5065a11e1f3f6a8df1';
+      localStorage.setItem('offline_db_credentials', JSON.stringify(credStore));
     }
   } catch {
     // Safe ignore

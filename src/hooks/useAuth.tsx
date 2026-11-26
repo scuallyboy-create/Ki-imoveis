@@ -3,6 +3,7 @@ import { SubscriptionPlan, UserProfile } from '../types';
 import {
   buildLocalSessionForProfile,
   clearAllBrowserAuthSessions,
+  ensureSeededLocalDb,
   saveLocalCredential,
   supabase,
   verifyLocalCredential,
@@ -282,6 +283,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     if (error) {
+      ensureSeededLocalDb();
       // Handle local preview login for accounts created when Supabase requires email confirmation
       const profiles = readLocalProfiles();
       const matchedProfile = profiles.find(
