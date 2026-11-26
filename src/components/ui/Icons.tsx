@@ -52,6 +52,12 @@ import {
   ExternalLink,
   RefreshCw,
   CheckCheck,
+  ArrowLeftRight,
+  Ban,
+  PauseCircle,
+  PlayCircle,
+  FileText,
+  Scale,
 } from 'lucide-react';
 
 export const Icons = {
@@ -108,4 +114,10 @@ export const Icons = {
   ExternalLink,
   RefreshCw,
   CheckCheck,
+  ArrowLeftRight,
+  Ban,
+  PauseCircle,
+  PlayCircle,
+  FileText,
+  Scale,
 };

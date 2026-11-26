@@ -4,7 +4,7 @@ import { Property } from '@/src/types';
 import {
   DATA_UPDATED_EVENT,
   filterProperties,
-  getProperties,
+  getPublicProperties,
   PropertySearchFilters,
 } from '@/src/lib/dataService';
 import { Icons } from '../ui/Icons';
@@ -15,6 +15,7 @@ interface PropertyGridProps {
   filters?: PropertySearchFilters;
   properties?: Property[];
   showAvailability?: boolean;
+  featuredFirst?: boolean;
   onResetFilters?: () => void;
 }
 
@@ -24,19 +25,25 @@ export default function PropertyGrid({
   filters,
   properties: externalProperties,
   showAvailability = true,
+  featuredFirst = false,
   onResetFilters,
 }: PropertyGridProps) {
-  const [allProperties, setAllProperties] = useState<Property[]>(() => getProperties());
+  const [allProperties, setAllProperties] = useState<Property[]>(() => getPublicProperties());
 
   useEffect(() => {
-    const sync = () => setAllProperties(getProperties());
+    const sync = () => setAllProperties(getPublicProperties());
     window.addEventListener(DATA_UPDATED_EVENT, sync);
-    return () => window.removeEventListener(DATA_UPDATED_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(DATA_UPDATED_EVENT, sync);
+      window.removeEventListener('storage', sync);
+    };
   }, []);
 
   const baseList = externalProperties || allProperties;
   const effectiveFilters: PropertySearchFilters = {
     ...filters,
+    ...(featuredFirst ? { featuredFirst: true } : {}),
     ...(category && category !== 'all' ? { type: category } : {}),
   };
 

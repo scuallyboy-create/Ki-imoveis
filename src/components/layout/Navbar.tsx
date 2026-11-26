@@ -10,6 +10,7 @@ import {
   markNotificationRead,
 } from '@/src/lib/notificationService';
 import { AppNotification } from '@/src/types';
+import { useCompare } from '@/src/context/CompareContext';
 
 export default function Navbar() {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -17,6 +18,7 @@ export default function Navbar() {
   const [notifOpen, setNotifOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const { user, signOut } = useAuth();
+  const { compareIds, setCompareModalOpen } = useCompare();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const location = useLocation();
   const navigate = useNavigate();
@@ -158,6 +160,26 @@ export default function Navbar() {
             >
               Publicar Imóvel
             </Link>
+          )}
+
+          {compareIds.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setCompareModalOpen(true)}
+              aria-label="Abrir comparação de imóveis"
+              className={cn(
+                'relative flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer shrink-0',
+                solidHeader
+                  ? 'bg-gray-900 text-white border-gray-900 hover:bg-brand-primary hover:border-brand-primary'
+                  : 'bg-white/15 backdrop-blur-sm border-white/30 text-white hover:bg-white/25'
+              )}
+            >
+              <Icons.ArrowLeftRight size={14} />
+              <span className="hidden sm:inline">Comparar</span>
+              <span className="px-1.5 py-0.5 rounded bg-brand-primary text-white text-[10px] font-bold tabular-nums">
+                {compareIds.length}
+              </span>
+            </button>
           )}
 
           {user && (

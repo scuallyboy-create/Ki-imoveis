@@ -55,6 +55,10 @@ export const PLAN_CATALOG: Record<SubscriptionPlan, {
   name: string;
   priceLabel: string;
   priceAOA: number;
+  billingPeriod?: string;
+  badgeText?: string;
+  highlighted?: boolean;
+  ctaLabel?: string;
   description: string;
   features: string[];
   defaultPermissions: UserPermissions;
@@ -63,6 +67,10 @@ export const PLAN_CATALOG: Record<SubscriptionPlan, {
     name: 'Essencial',
     priceLabel: 'Grátis',
     priceAOA: 0,
+    billingPeriod: '',
+    badgeText: '',
+    highlighted: false,
+    ctaLabel: 'Começar Essencial',
     description: 'Para proprietários e agentes em início de atividade.',
     features: ['Até 10 Imóveis', 'Painel Básico', 'Gestão de Visitas'],
     defaultPermissions: {
@@ -77,6 +85,10 @@ export const PLAN_CATALOG: Record<SubscriptionPlan, {
     name: 'Silver Pro',
     priceLabel: '25.000 Kz',
     priceAOA: 25000,
+    billingPeriod: '/mês',
+    badgeText: 'Mais Popular',
+    highlighted: true,
+    ctaLabel: 'Escolher Silver Pro',
     description: 'Para corretores ativos com carteira em expansão.',
     features: ['Até 50 Imóveis', 'Destaque nos Resultados', 'Acesso a Leads', 'Selo Silver'],
     defaultPermissions: {
@@ -91,6 +103,10 @@ export const PLAN_CATALOG: Record<SubscriptionPlan, {
     name: 'Gold Elite',
     priceLabel: '65.000 Kz',
     priceAOA: 65000,
+    billingPeriod: '/mês',
+    badgeText: '',
+    highlighted: false,
+    ctaLabel: 'Escolher Gold Elite',
     description: 'Para agências e consultores de alto volume em Angola.',
     features: ['Imóveis Ilimitados', 'Prioridade Máxima em Leads', 'Destaque Premium', 'Selo Gold Verificado'],
     defaultPermissions: {

@@ -1,4 +1,5 @@
 import { AppNotification, NotificationPreferences, NotificationType } from '../types';
+import { safeParseJsonResponse } from './http';
 
 const NOTIFICATIONS_KEY = 'ki_imoveis_notifications_v1';
 const DATA_UPDATED_EVENT_NAME = 'ki-data-updated';
@@ -174,7 +175,14 @@ export async function dispatchNotification(
       }),
     });
 
-    const data = await res.json();
+    const parsed = await safeParseJsonResponse<{
+      delivered?: boolean;
+      provider?: string;
+      note?: string;
+      error?: string;
+    }>(res, 'Alerta guardado na caixa de notificações.');
+
+    const data = parsed.data;
     const updatedRecord: AppNotification = {
       ...initialRecord,
       emailSent: Boolean(data?.delivered),
@@ -186,7 +194,7 @@ export async function dispatchNotification(
         data?.note ||
         (data?.delivered
           ? `E-mail enviado para ${input.userEmail}`
-          : data?.error || `Alerta registado para ${input.userEmail}`),
+          : data?.error || parsed.errorMessage || `Alerta registado para ${input.userEmail}`),
     };
 
     const refreshed = getAllNotifications().map((item) =>

@@ -7,6 +7,7 @@ import { DATA_UPDATED_EVENT, getAgentById, getProperties } from '@/src/lib/dataS
 import { AvailabilityStatus, Property } from '@/src/types';
 import { cn } from '@/src/lib/utils';
 import { useToast } from '@/src/components/ui/Toast';
+import AgentFeeTermsBox from '../components/ui/AgentFeeTermsBox';
 
 export default function AgentProfile() {
   const { id } = useParams();
@@ -20,6 +21,7 @@ export default function AgentProfile() {
   const [contactName, setContactName] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [contactMsg, setContactMsg] = useState('');
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   useEffect(() => {
     const sync = () => {
@@ -66,8 +68,13 @@ export default function AgentProfile() {
 
   const handleSendContact = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!acceptedTerms) {
+      showToast('Aceite os Termos e Condições da taxa do agente para enviar.', 'error');
+      return;
+    }
     setContactOpen(false);
     setContactMsg('');
+    setAcceptedTerms(false);
     showToast(`Mensagem enviada para ${agent.name}. Receberá resposta em breve.`, 'success');
   };
 
@@ -115,7 +122,10 @@ export default function AgentProfile() {
             <div className="w-full space-y-2.5">
               <button
                 type="button"
-                onClick={() => setContactOpen(true)}
+                onClick={() => {
+                  setAcceptedTerms(false);
+                  setContactOpen(true);
+                }}
                 className="w-full btn-primary py-3 text-sm"
               >
                 Contactar Agente
@@ -154,6 +164,11 @@ export default function AgentProfile() {
 
         {/* Main Content */}
         <main className="flex-1 space-y-10">
+          {agent.licenseStatus === 'suspended' && (
+            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-sm">
+              <strong>Conta temporariamente suspensa:</strong> Este perfil encontra-se em revisão administrativa e não está a aceitar novas publicações no momento.
+            </div>
+          )}
           <section>
             <h2 className="text-2xl font-bold mb-3 text-gray-900">Sobre {agent.name}</h2>
             <p className="text-gray-600 leading-relaxed max-w-2xl">{agent.bio}</p>
@@ -316,6 +331,12 @@ export default function AgentProfile() {
                   className="input-field py-2.5 text-sm"
                 />
               </div>
+              <AgentFeeTermsBox
+                accepted={acceptedTerms}
+                onChange={setAcceptedTerms}
+                contextLabel={`o contacto e mediação com ${agent.name}`}
+                compact
+              />
               <div className="flex gap-3 pt-2">
                 <button
                   type="button"
@@ -324,7 +345,11 @@ export default function AgentProfile() {
                 >
                   Cancelar
                 </button>
-                <button type="submit" className="flex-1 btn-primary py-2.5 text-sm">
+                <button
+                  type="submit"
+                  disabled={!acceptedTerms}
+                  className="flex-1 btn-primary py-2.5 text-sm disabled:opacity-50"
+                >
                   Enviar Mensagem
                 </button>
               </div>

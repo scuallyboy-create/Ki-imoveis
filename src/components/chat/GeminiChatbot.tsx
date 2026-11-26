@@ -3,6 +3,7 @@ import { Icons } from '../ui/Icons';
 import { useAuth } from '@/src/hooks/useAuth';
 import { GroundedPlaceLink } from '@/src/types';
 import { cn } from '@/src/lib/utils';
+import { safeParseJsonResponse } from '@/src/lib/http';
 
 interface ChatMessage {
   id: string;
@@ -100,17 +101,23 @@ export default function GeminiChatbot() {
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error || 'Não foi possível obter resposta.');
+      const parsed = await safeParseJsonResponse<{
+        text?: string;
+        places?: GroundedPlaceLink[];
+        model?: string;
+        error?: string;
+      }>(res, 'Não foi possível obter resposta do assistente.');
+
+      if (!parsed.ok || !parsed.data?.text) {
+        throw new Error(parsed.errorMessage || 'Não foi possível obter resposta.');
       }
 
       const modelMsg: ChatMessage = {
         id: 'm-' + Date.now(),
         role: 'model',
-        text: data.text,
-        places: Array.isArray(data.places) ? data.places : undefined,
-        modelUsed: data.model,
+        text: parsed.data.text,
+        places: Array.isArray(parsed.data.places) ? parsed.data.places : undefined,
+        modelUsed: parsed.data.model,
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, modelMsg]);

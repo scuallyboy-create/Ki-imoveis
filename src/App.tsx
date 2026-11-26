@@ -12,9 +12,13 @@ import Agents from './pages/Agents';
 import AgentProfile from './pages/AgentProfile';
 import SubmitRequest from './pages/SubmitRequest';
 import BecomePartner from './pages/BecomePartner';
+import Compare from './pages/Compare';
 import { AuthProvider } from './hooks/useAuth';
 import { ToastProvider } from './components/ui/Toast';
+import { CompareProvider } from './context/CompareContext';
 import GeminiChatbot from './components/chat/GeminiChatbot';
+import CompareTray from './components/listings/CompareTray';
+import CompareModal from './components/listings/CompareModal';
 
 const MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined) || '';
 
@@ -44,57 +48,62 @@ export default function App() {
   return (
     <ToastProvider>
       <AuthProvider>
-        <MapsProviderWrapper>
-          <Router>
-            <div className="min-h-screen bg-gray-50 text-gray-900 font-sans selection:bg-gray-900 selection:text-white">
-              {quotaExceeded && (
-                <div
-                  role="alert"
-                  className="sticky top-0 z-[100] bg-amber-50 border-b border-amber-300 px-4 py-3 text-amber-900 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm"
-                >
-                  <span>
-                    <strong>Google Maps API key expired or quota exceeded.</strong> Enable billing
-                    in your Google Cloud Console or create a new project to restore full map
-                    functionality.{' '}
-                    <a
-                      href="https://console.cloud.google.com/billing"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline font-semibold"
-                    >
-                      Manage Billing
-                    </a>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setQuotaExceeded(false)}
-                    className="px-3 py-1 rounded-lg bg-amber-200/70 hover:bg-amber-200 text-xs font-semibold cursor-pointer"
+        <CompareProvider>
+          <MapsProviderWrapper>
+            <Router>
+              <div className="min-h-screen bg-gray-50 text-gray-900 font-sans selection:bg-gray-900 selection:text-white">
+                {quotaExceeded && (
+                  <div
+                    role="alert"
+                    className="sticky top-0 z-[100] bg-amber-50 border-b border-amber-300 px-4 py-3 text-amber-900 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm"
                   >
-                    Fechar
-                  </button>
-                </div>
-              )}
+                    <span>
+                      <strong>Google Maps API key expired or quota exceeded.</strong> Enable billing
+                      in your Google Cloud Console or create a new project to restore full map
+                      functionality.{' '}
+                      <a
+                        href="https://console.cloud.google.com/billing"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline font-semibold"
+                      >
+                        Manage Billing
+                      </a>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setQuotaExceeded(false)}
+                      className="px-3 py-1 rounded-lg bg-amber-200/70 hover:bg-amber-200 text-xs font-semibold cursor-pointer"
+                    >
+                      Fechar
+                    </button>
+                  </div>
+                )}
 
-              <Navbar />
-              <main>
-                <AnimatePresence mode="wait">
-                  <Routes>
-                    <Route path="/" element={<Home />} />
-                    <Route path="/listings" element={<Listings />} />
-                    <Route path="/property/:id" element={<PropertyDetails />} />
-                    <Route path="/agents" element={<Agents />} />
-                    <Route path="/agents/:id" element={<AgentProfile />} />
-                    <Route path="/request-submission" element={<SubmitRequest />} />
-                    <Route path="/become-partner" element={<BecomePartner />} />
-                    <Route path="/dashboard" element={<Dashboard />} />
-                    <Route path="/auth" element={<AuthPage />} />
-                  </Routes>
-                </AnimatePresence>
-              </main>
-              <GeminiChatbot />
-            </div>
-          </Router>
-        </MapsProviderWrapper>
+                <Navbar />
+                <main>
+                  <AnimatePresence mode="wait">
+                    <Routes>
+                      <Route path="/" element={<Home />} />
+                      <Route path="/listings" element={<Listings />} />
+                      <Route path="/property/:id" element={<PropertyDetails />} />
+                      <Route path="/agents" element={<Agents />} />
+                      <Route path="/agents/:id" element={<AgentProfile />} />
+                      <Route path="/compare" element={<Compare />} />
+                      <Route path="/request-submission" element={<SubmitRequest />} />
+                      <Route path="/become-partner" element={<BecomePartner />} />
+                      <Route path="/dashboard" element={<Dashboard />} />
+                      <Route path="/auth" element={<AuthPage />} />
+                    </Routes>
+                  </AnimatePresence>
+                </main>
+                <CompareTray />
+                <CompareModal />
+                <GeminiChatbot />
+              </div>
+            </Router>
+          </MapsProviderWrapper>
+        </CompareProvider>
       </AuthProvider>
     </ToastProvider>
   );

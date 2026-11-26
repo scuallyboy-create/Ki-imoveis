@@ -10,7 +10,7 @@ import {
   DATA_UPDATED_EVENT,
   filterProperties,
   getCoordinatesForLocation,
-  getProperties,
+  getPublicProperties,
 } from '@/src/lib/dataService';
 import { AvailabilityStatus, Property } from '@/src/types';
 import { Icons } from '../components/ui/Icons';
@@ -18,7 +18,7 @@ import { cn } from '@/src/lib/utils';
 
 export default function Listings() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [allProperties, setAllProperties] = useState<Property[]>(() => getProperties());
+  const [allProperties, setAllProperties] = useState<Property[]>(() => getPublicProperties());
   const [viewMode, setViewMode] = useState<'grid' | 'map'>('grid');
   const [visibleLimit, setVisibleLimit] = useState(8);
 
@@ -34,9 +34,13 @@ export default function Listings() {
   const sortParam = (searchParams.get('sort') as 'recent' | 'price_asc' | 'price_desc') || 'recent';
 
   useEffect(() => {
-    const sync = () => setAllProperties(getProperties());
+    const sync = () => setAllProperties(getPublicProperties());
     window.addEventListener(DATA_UPDATED_EVENT, sync);
-    return () => window.removeEventListener(DATA_UPDATED_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(DATA_UPDATED_EVENT, sync);
+      window.removeEventListener('storage', sync);
+    };
   }, []);
 
   const updateParam = (key: string, value: string) => {

@@ -38,6 +38,20 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
+function isRetryableGeminiError(err: any): boolean {
+  const status = Number(err?.status || err?.code || 0);
+  if (status === 429 || status === 503 || status === 502 || status === 504) return true;
+  const raw = typeof err?.message === 'string' ? err.message : '';
+  return (
+    raw.includes('"code":503') ||
+    raw.includes('"code":429') ||
+    raw.includes('UNAVAILABLE') ||
+    raw.includes('RESOURCE_EXHAUSTED') ||
+    raw.includes('high demand') ||
+    raw.includes('overloaded')
+  );
+}
+
 function extractGeminiError(err: any, fallback: string): { status: number; message: string } {
   const rawMsg = typeof err?.message === 'string' ? err.message : '';
   try {
@@ -157,7 +171,7 @@ async function startServer() {
       : [];
 
     const wantsMaps = Boolean(useMapsGrounding);
-    const model = fastMode && !wantsMaps ? 'gemini-3.1-flash-lite' : 'gemini-4-hydrogen';
+    const primaryModel = fastMode && !wantsMaps ? 'gemini-3.1-flash-lite' : 'gemini-4-hydrogen';
 
     const userContext =
       userName || userRole
@@ -172,18 +186,18 @@ Ajude compradores, inquilinos, proprietários e agentes com:
 - Agendamento de visitas na plataforma, planos de licenciamento (Essencial, Silver Pro, Gold Elite) e acompanhamento de alertas por e-mail.
 Nunca invente endereços ou preços específicos que não tenham sido fornecidos ou fundamentados pelo Google Maps.${userContext}`;
 
-    try {
-      const hasCoords =
-        typeof lat === 'number' &&
-        typeof lng === 'number' &&
-        Number.isFinite(lat) &&
-        Number.isFinite(lng);
+    const hasCoords =
+      typeof lat === 'number' &&
+      typeof lng === 'number' &&
+      Number.isFinite(lat) &&
+      Number.isFinite(lng);
 
+    const runChatAttempt = async (modelName: string, enableMaps: boolean) => {
       const chat = ai.chats.create({
-        model,
+        model: modelName,
         config: {
           systemInstruction,
-          ...(wantsMaps
+          ...(enableMaps
             ? {
                 tools: [{ googleMaps: {} }],
                 ...(hasCoords
@@ -202,15 +216,41 @@ Nunca invente endereços ou preços específicos que não tenham sido fornecidos
       });
 
       const response = await chat.sendMessage({ message: message.trim() });
-      const places = wantsMaps ? extractGroundedPlaces(response) : [];
-
-      res.json({
+      const places = enableMaps ? extractGroundedPlaces(response) : [];
+      return {
         text: response.text || 'Não foi possível gerar resposta neste momento.',
-        model,
+        model: modelName,
         places,
-      });
-    } catch (err: any) {
-      const friendly = extractGeminiError(err, 'Erro ao comunicar com o modelo Gemini.');
+      };
+    };
+
+    try {
+      const result = await runChatAttempt(primaryModel, wantsMaps);
+      res.json(result);
+    } catch (primaryErr: any) {
+      if (isRetryableGeminiError(primaryErr) && primaryModel !== 'gemini-3.1-flash-lite') {
+        try {
+          const fallbackResult = await runChatAttempt('gemini-3.1-flash-lite', wantsMaps);
+          res.json(fallbackResult);
+          return;
+        } catch (mapsFallbackErr: any) {
+          if (wantsMaps) {
+            try {
+              const textOnlyResult = await runChatAttempt('gemini-3.1-flash-lite', false);
+              res.json(textOnlyResult);
+              return;
+            } catch (finalErr: any) {
+              const friendly = extractGeminiError(finalErr, 'Erro ao comunicar com o modelo Gemini.');
+              res.status(friendly.status).json({ error: friendly.message });
+              return;
+            }
+          }
+          const friendly = extractGeminiError(mapsFallbackErr, 'Erro ao comunicar com o modelo Gemini.');
+          res.status(friendly.status).json({ error: friendly.message });
+          return;
+        }
+      }
+      const friendly = extractGeminiError(primaryErr, 'Erro ao comunicar com o modelo Gemini.');
       res.status(friendly.status).json({ error: friendly.message });
     }
   });
@@ -242,9 +282,9 @@ Imóvel em análise: ${String(propertyTitle || 'Imóvel Ki-Imóveis')} (${String
 Pedido do utilizador: ${query.trim()}
 Identifica locais reais, serviços, acessos ou pontos de interesse relevantes nas proximidades com base nos dados do Google Maps.`;
 
-    try {
+    const runGroundingAttempt = async (modelName: string) => {
       const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
+        model: modelName,
         contents: prompt,
         config: {
           tools: [{ googleMaps: {} }],
@@ -259,14 +299,29 @@ Identifica locais reais, serviços, acessos ou pontos de interesse relevantes na
             : {}),
         },
       });
-
       const places = extractGroundedPlaces(response);
-      res.json({
+      return {
         text: response.text || '',
         places,
-      });
-    } catch (err: any) {
-      const friendly = extractGeminiError(err, 'Erro ao consultar o Google Maps Grounding.');
+      };
+    };
+
+    try {
+      const result = await runGroundingAttempt('gemini-4-hydrogen');
+      res.json(result);
+    } catch (primaryErr: any) {
+      if (isRetryableGeminiError(primaryErr)) {
+        try {
+          const fallbackResult = await runGroundingAttempt('gemini-3.1-flash-lite');
+          res.json(fallbackResult);
+          return;
+        } catch (fallbackErr: any) {
+          const friendly = extractGeminiError(fallbackErr, 'Erro ao consultar o Google Maps Grounding.');
+          res.status(friendly.status).json({ error: friendly.message });
+          return;
+        }
+      }
+      const friendly = extractGeminiError(primaryErr, 'Erro ao consultar o Google Maps Grounding.');
       res.status(friendly.status).json({ error: friendly.message });
     }
   });
@@ -402,6 +457,19 @@ Identifica locais reais, serviços, acessos ou pontos de interesse relevantes na
       sentAt: Date.now(),
       note: 'Alerta registado na sua caixa de entrada Ki-Imóveis (configure SMTP_HOST ou RESEND_API_KEY para entrega externa).',
     });
+  });
+
+  // Always return JSON for unmatched /api/* routes instead of HTML/text fallback
+  app.all('/api/*', (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'Endpoint API não encontrado.' });
+  });
+
+  app.use((err: any, req: Request, res: Response, next: any) => {
+    if (req.path.startsWith('/api/')) {
+      res.status(err?.status || 400).json({ error: err?.message || 'Pedido API inválido.' });
+      return;
+    }
+    next(err);
   });
 
   if (!IS_PROD) {

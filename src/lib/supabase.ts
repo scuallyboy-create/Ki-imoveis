@@ -32,25 +32,12 @@ const isPublishableKey = (k: any): boolean => {
   return trimmed.startsWith('sb_publishable_') || trimmed.startsWith('eyJ');
 };
 
-const finalUrl = isValidUrl(rawUrl)
-  ? (rawUrl as string).trim()
-  : (isValidUrl(rawKey) ? (rawKey as string).trim() : 'https://atxqweinmcpsraienagg.supabase.co');
+const DEFAULT_SUPABASE_URL = 'https://ruewingpnfbgqdvwpklp.supabase.co';
+const DEFAULT_SUPABASE_KEY = 'sb_publishable_qQTWgxBLqsQaOB6chNmUJQ__m4eDW8a';
 
-let finalKey = 'sb_publishable_69RC5-HgtQN_gKs6f7-r8g_SqVo1oYa';
-if (isPublishableKey(rawKey)) {
-  finalKey = (rawKey as string).trim();
-} else if (isPublishableKey(rawUrl)) {
-  finalKey = (rawUrl as string).trim();
-} else if (
-  typeof rawKey === 'string' &&
-  rawKey.trim() &&
-  !isSecretKey(rawKey) &&
-  !isValidUrl(rawKey) &&
-  rawKey.trim() !== 'undefined' &&
-  rawKey.trim() !== 'null'
-) {
-  finalKey = rawKey.trim();
-}
+const hasMatchedEnvPair = isValidUrl(rawUrl) && isPublishableKey(rawKey);
+const finalUrl = hasMatchedEnvPair ? (rawUrl as string).trim() : DEFAULT_SUPABASE_URL;
+const finalKey = hasMatchedEnvPair ? (rawKey as string).trim() : DEFAULT_SUPABASE_KEY;
 
 // Seed local database tables if not present
 export function ensureSeededLocalDb() {
@@ -361,6 +348,21 @@ const handleLocalFallback = async (urlStr: string, init?: RequestInit): Promise<
     }
 
     const localProfiles = JSON.parse(localStorage.getItem('offline_db_profiles') || '[]');
+    const deletedRaw = JSON.parse(localStorage.getItem('ki_imoveis_deleted_agents_v1') || '{}');
+    const deletedEmails: string[] = Array.isArray(deletedRaw?.emails)
+      ? deletedRaw.emails.map((e: string) => e.toLowerCase())
+      : [];
+
+    if (deletedEmails.includes(email.toLowerCase())) {
+      return new Response(
+        JSON.stringify({ message: 'Esta conta foi eliminada pela administração Ki-Imóveis.' }),
+        {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
     const existing = localProfiles.find(
       (p: any) => p.email?.toLowerCase() === email.toLowerCase()
     );
@@ -370,6 +372,16 @@ const handleLocalFallback = async (urlStr: string, init?: RequestInit): Promise<
         status: 400,
         headers: { 'Content-Type': 'application/json' },
       });
+    }
+
+    if (existing.licenseStatus === 'blocked') {
+      return new Response(
+        JSON.stringify({ message: 'Esta conta foi bloqueada pela administração Ki-Imóveis.' }),
+        {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
     }
 
     const credCheck = await verifyLocalCredential(email, password);
@@ -631,19 +643,27 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     if (response.status >= 500) {
       throw new Error(`Server returned error status: ${response.status}`);
     }
+    if (
+      response.status === 429 &&
+      (urlStr.includes('/auth/v1/signup') || urlStr.includes('/auth/v1/recover'))
+    ) {
+      throw new Error('Supabase auth email rate limit reached.');
+    }
     if (response.status === 401 || response.status === 403) {
       const cloned = response.clone();
       try {
         const data = await cloned.json();
+        const errText = `${data?.message || ''} ${data?.msg || ''} ${data?.hint || ''}`;
         if (
-          (data?.message && typeof data.message === 'string' && data.message.includes('Forbidden use of secret API key')) ||
-          (data?.hint && typeof data.hint === 'string' && data.hint.includes('Secret API keys can only be used')) ||
+          errText.includes('Forbidden use of secret API key') ||
+          errText.includes('Secret API keys can only be used') ||
+          errText.includes('Invalid API key') ||
           data?.sb_error_code === 'UNAUTHORIZED_INVALID_API_KEY_TYPE'
         ) {
-          throw new Error('Supabase rejected secret API key.');
+          throw new Error('Supabase rejected API key.');
         }
       } catch (parseErr: any) {
-        if (parseErr.message?.includes('Supabase rejected secret API key')) {
+        if (parseErr.message?.includes('Supabase rejected API key')) {
           throw parseErr;
         }
       }

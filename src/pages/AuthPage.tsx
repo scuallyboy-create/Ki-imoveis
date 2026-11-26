@@ -1,11 +1,11 @@
-import { useState, type FormEvent } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { motion } from 'motion/react';
 import { Icons } from '../components/ui/Icons';
 import { cn } from '@/src/lib/utils';
 import { useAuth } from '../hooks/useAuth';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { getPlanCatalog } from '../lib/dataService';
-import { SubscriptionPlan } from '../types';
+import { DATA_UPDATED_EVENT, getPlanCatalog } from '../lib/dataService';
+import { PlanCatalogItem, SubscriptionPlan } from '../types';
 import { useToast } from '../components/ui/Toast';
 
 export default function AuthPage() {
@@ -23,7 +23,20 @@ export default function AuthPage() {
 
   const [searchParams] = useSearchParams();
   const planParam = searchParams.get('plan') as SubscriptionPlan | null;
-  const planCatalog = getPlanCatalog();
+  const [planCatalog, setPlanCatalog] = useState<Record<SubscriptionPlan, PlanCatalogItem>>(() =>
+    getPlanCatalog()
+  );
+
+  useEffect(() => {
+    const sync = () => setPlanCatalog(getPlanCatalog());
+    window.addEventListener(DATA_UPDATED_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(DATA_UPDATED_EVENT, sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, []);
+
   const [role, setRole] = useState<'user' | 'agent'>(
     planParam && planParam !== 'free' ? 'agent' : 'user'
   );
@@ -77,6 +90,10 @@ export default function AuthPage() {
         setError('E-mail ou palavra-passe incorretos. Tente novamente.');
       } else if (msg.includes('User already registered')) {
         setError('Este e-mail já está registado. Tente entrar na sua conta.');
+      } else if (msg.toLowerCase().includes('is invalid') || msg.includes('email_address_invalid')) {
+        setError('Endereço de e-mail inválido. Use um e-mail válido (ex: nome@gmail.com).');
+      } else if (msg.toLowerCase().includes('rate limit')) {
+        setError('Muitas tentativas em sequência. Aguarde alguns instantes e tente novamente.');
       } else {
         setError(msg || 'Ocorreu um erro na autenticação.');
       }

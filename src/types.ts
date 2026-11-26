@@ -1,5 +1,5 @@
 export type SubscriptionPlan = 'free' | 'silver' | 'gold';
-export type LicenseStatus = 'active' | 'pending' | 'suspended' | 'expired';
+export type LicenseStatus = 'active' | 'pending' | 'suspended' | 'blocked' | 'expired';
 export type AvailabilityStatus = 'available' | 'sold' | 'rented';
 
 export interface UserPermissions {
@@ -14,6 +14,10 @@ export interface PlanCatalogItem {
   name: string;
   priceLabel: string;
   priceAOA: number;
+  billingPeriod?: string;
+  badgeText?: string;
+  highlighted?: boolean;
+  ctaLabel?: string;
   description: string;
   features: string[];
   defaultPermissions: UserPermissions;
@@ -26,6 +30,7 @@ export interface Property {
   price: number; // in AOA
   type: 'apartment' | 'house' | 'luxury' | 'commercial';
   category: string;
+  isFeatured?: boolean;
   location: {
     province: string;
     city: string;
@@ -111,6 +116,7 @@ export interface AgentDirectoryItem {
   subscriptionPlan?: SubscriptionPlan;
   licenseStatus?: LicenseStatus;
   licenseNumber?: string;
+  statusReason?: string;
   adminEvaluation?: AgentEvaluation;
 }
 
@@ -168,6 +174,8 @@ export interface PropertyRequest {
   notificationMethod?: string;
   status: 'pending' | 'claimed' | 'completed';
   assignedAgentId?: string;
+  acceptedAgentFeeTerms?: boolean;
+  acceptedTermsAt?: number;
   createdAt: number;
 }
 
@@ -186,6 +194,8 @@ export interface VisitRequest {
   intent: 'visit' | 'rent' | 'buy';
   status: 'pending' | 'confirmed' | 'cancelled';
   message?: string;
+  acceptedAgentFeeTerms?: boolean;
+  acceptedTermsAt?: number;
   createdAt: number;
 }
 

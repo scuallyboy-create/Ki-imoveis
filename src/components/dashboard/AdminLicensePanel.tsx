@@ -5,6 +5,7 @@ import { ADMIN_EMAIL, ADMIN_MANAGEMENT_PERMISSIONS } from '@/src/constants';
 import {
   adminUpdateUserProfile,
   DATA_UPDATED_EVENT,
+  deleteAgentOrAgency,
   emitDataUpdate,
   evaluateAgent,
   formatPlanPriceLabel,
@@ -14,6 +15,7 @@ import {
   getPlanCatalog,
   getProperties,
   resetPlanCatalog,
+  setAccountModerationStatus,
   updatePlanCatalogItem,
 } from '@/src/lib/dataService';
 import {
@@ -48,13 +50,14 @@ export default function AdminLicensePanel() {
     getPlanCatalog()
   );
   const [users, setUsers] = useState<UserProfile[]>(() => getAllUserProfiles());
-  const [agents, setAgents] = useState<AgentDirectoryItem[]>(() => getAllAgents());
+  const [agents, setAgents] = useState<AgentDirectoryItem[]>(() => getAllAgents(true));
   const [properties, setProperties] = useState<Property[]>(() => getProperties());
   const [applications, setApplications] = useState<AgentApplication[]>([]);
   const [search, setSearch] = useState('');
   const [planFilter, setPlanFilter] = useState<'all' | SubscriptionPlan>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | LicenseStatus>('all');
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Package edit modal state
   const [editingPlanKey, setEditingPlanKey] = useState<SubscriptionPlan | null>(null);
@@ -73,6 +76,18 @@ export default function AdminLicensePanel() {
     if (s && ['licenses', 'agents', 'packages', 'users'].includes(s)) {
       setSection(s);
     }
+    const editPlan = searchParams.get('editPlan') as SubscriptionPlan | null;
+    if (editPlan && (editPlan === 'free' || editPlan === 'silver' || editPlan === 'gold')) {
+      setSection('packages');
+      const latestCatalog = getPlanCatalog();
+      const target = latestCatalog[editPlan];
+      if (target) {
+        setEditingPlanKey(editPlan);
+        setPlanForm(JSON.parse(JSON.stringify(target)));
+        setPlanFeaturesText(target.features.join('\n'));
+        setSyncPlanUsers(true);
+      }
+    }
   }, [searchParams]);
 
   const changeSection = (next: AdminSection) => {
@@ -80,13 +95,24 @@ export default function AdminLicensePanel() {
     const params = new URLSearchParams(searchParams);
     params.set('tab', 'admin');
     params.set('section', next);
+    params.delete('editPlan');
     setSearchParams(params);
+  };
+
+  const closePlanModal = () => {
+    setEditingPlanKey(null);
+    setPlanForm(null);
+    if (searchParams.has('editPlan')) {
+      const params = new URLSearchParams(searchParams);
+      params.delete('editPlan');
+      setSearchParams(params, { replace: true });
+    }
   };
 
   const loadAll = async () => {
     setPlanCatalog(getPlanCatalog());
     setUsers(getAllUserProfiles());
-    setAgents(getAllAgents());
+    setAgents(getAllAgents(true));
     setProperties(getProperties());
     try {
       const { data } = await supabase.from('partner_applications').select('*');
@@ -283,6 +309,35 @@ export default function AdminLicensePanel() {
     });
   };
 
+  const handleModerateStatus = (
+    targetId: string,
+    targetName: string,
+    nextStatus: 'active' | 'suspended' | 'blocked'
+  ) => {
+    const res = setAccountModerationStatus(targetId, nextStatus);
+    if (!res) {
+      showToast('Não é possível alterar o estado desta conta.', 'error');
+      return;
+    }
+    const label =
+      nextStatus === 'blocked'
+        ? 'bloqueado'
+        : nextStatus === 'suspended'
+        ? 'suspenso'
+        : 'reativado';
+    showToast(`${targetName} foi ${label} com sucesso.`, nextStatus === 'active' ? 'success' : 'info');
+  };
+
+  const handleDeleteTarget = (targetId: string, targetName: string) => {
+    const ok = deleteAgentOrAgency(targetId, true);
+    setConfirmDeleteId(null);
+    if (!ok) {
+      showToast('Esta conta administrativa não pode ser eliminada.', 'error');
+      return;
+    }
+    showToast(`${targetName} e os seus anúncios foram eliminados.`, 'info');
+  };
+
   const togglePermission = (key: keyof UserPermissions) => {
     if (!editingUser || !editingUser.permissions) return;
     if (editingUser.email.toLowerCase() === ADMIN_EMAIL) return;
@@ -462,11 +517,20 @@ export default function AdminLicensePanel() {
               const available = agProps.filter((p) => (p.availabilityStatus || 'available') === 'available').length;
               const sold = agProps.filter((p) => p.availabilityStatus === 'sold').length;
               const rented = agProps.filter((p) => p.availabilityStatus === 'rented').length;
+              const agStatus: LicenseStatus = ag.licenseStatus || 'active';
+              const isConfirmingDel = confirmDeleteId === `ag-${ag.id}`;
 
               return (
                 <div
                   key={ag.id}
-                  className="border border-gray-200 rounded-2xl p-5 flex flex-col justify-between gap-4"
+                  className={cn(
+                    'border rounded-2xl p-5 flex flex-col justify-between gap-4',
+                    agStatus === 'blocked'
+                      ? 'border-rose-300 bg-rose-50/30'
+                      : agStatus === 'suspended'
+                      ? 'border-amber-300 bg-amber-50/30'
+                      : 'border-gray-200 bg-white'
+                  )}
                 >
                   <div className="flex items-start gap-4">
                     <img
@@ -483,13 +547,38 @@ export default function AdminLicensePanel() {
                         >
                           {ag.name}
                         </Link>
-                        <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600 tabular-nums shrink-0">
-                          <Icons.Star size={13} className="fill-current" />
-                          {ag.rating.toFixed(1)}
-                        </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span
+                            className={cn(
+                              'px-2 py-0.5 rounded text-[10px] font-bold border',
+                              agStatus === 'active'
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                : agStatus === 'suspended'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : agStatus === 'blocked'
+                                ? 'bg-rose-100 text-rose-900 border-rose-300'
+                                : 'bg-gray-100 text-gray-700 border-gray-200'
+                            )}
+                          >
+                            {agStatus === 'active'
+                              ? 'Ativo'
+                              : agStatus === 'suspended'
+                              ? 'Suspenso'
+                              : agStatus === 'blocked'
+                              ? 'Bloqueado'
+                              : agStatus === 'pending'
+                              ? 'Pendente'
+                              : 'Expirado'}
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-600 tabular-nums">
+                            <Icons.Star size={13} className="fill-current" />
+                            {ag.rating.toFixed(1)}
+                          </span>
+                        </div>
                       </div>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        {ag.location} · {ag.verified ? 'Verificado' : 'Não verificado'} · Licença{' '}
+                        {ag.type === 'agency' ? 'Agência' : 'Agente'} · {ag.location} ·{' '}
+                        {ag.verified ? 'Verificado' : 'Não verificado'} · Licença{' '}
                         <span className="font-mono">{ag.licenseNumber || 'Pendente'}</span>
                       </p>
                       <p className="text-xs text-gray-600 mt-2 tabular-nums">
@@ -503,20 +592,79 @@ export default function AdminLicensePanel() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-3 pt-3 border-t border-gray-100">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-gray-100">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => openEvaluationModal(ag)}
+                        className="px-3 py-1.5 rounded-xl bg-gray-900 text-white text-xs font-semibold hover:bg-brand-primary transition-colors cursor-pointer"
+                      >
+                        Avaliar
+                      </button>
+
+                      {agStatus === 'suspended' || agStatus === 'blocked' ? (
+                        <button
+                          type="button"
+                          onClick={() => handleModerateStatus(ag.id, ag.name, 'active')}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 cursor-pointer flex items-center gap-1"
+                        >
+                          <Icons.PlayCircle size={13} /> Reativar
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleModerateStatus(ag.id, ag.name, 'suspended')}
+                          className="px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 text-xs font-semibold hover:bg-amber-100 cursor-pointer flex items-center gap-1"
+                        >
+                          <Icons.PauseCircle size={13} /> Suspender
+                        </button>
+                      )}
+
+                      {agStatus !== 'blocked' && (
+                        <button
+                          type="button"
+                          onClick={() => handleModerateStatus(ag.id, ag.name, 'blocked')}
+                          className="px-3 py-1.5 rounded-xl border border-rose-300 bg-rose-50 text-rose-800 text-xs font-semibold hover:bg-rose-100 cursor-pointer flex items-center gap-1"
+                        >
+                          <Icons.Ban size={13} /> Bloquear
+                        </button>
+                      )}
+
+                      {isConfirmingDel ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTarget(ag.id, ag.name)}
+                            className="px-2.5 py-1.5 rounded-xl bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 cursor-pointer"
+                          >
+                            Confirmar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2 py-1.5 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600 cursor-pointer"
+                          >
+                            Não
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(`ag-${ag.id}`)}
+                          className="px-2.5 py-1.5 rounded-xl border border-gray-200 text-gray-600 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 text-xs font-semibold cursor-pointer flex items-center gap-1"
+                          title="Eliminar agente ou agência"
+                        >
+                          <Icons.Trash2 size={13} /> Eliminar
+                        </button>
+                      )}
+                    </div>
+
                     <Link
                       to={`/agents/${ag.id}`}
                       className="text-xs font-semibold text-gray-600 hover:text-gray-900 underline"
                     >
-                      Ver Perfil Público
+                      Perfil
                     </Link>
-                    <button
-                      type="button"
-                      onClick={() => openEvaluationModal(ag)}
-                      className="px-4 py-2 rounded-xl bg-gray-900 text-white text-xs font-semibold hover:bg-brand-primary transition-colors cursor-pointer"
-                    >
-                      Avaliar Agente
-                    </button>
                   </div>
                 </div>
               );
@@ -565,11 +713,18 @@ export default function AdminLicensePanel() {
                       <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
                         Código: {planKey}
                       </span>
-                      <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-[11px] font-semibold">
-                        {item.defaultPermissions.maxListings === -1
-                          ? 'Ilimitado'
-                          : `Até ${item.defaultPermissions.maxListings} imóveis`}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {item.highlighted && (
+                          <span className="px-2 py-0.5 rounded bg-rose-100 text-brand-primary text-[11px] font-bold">
+                            {item.badgeText || 'Destacado'}
+                          </span>
+                        )}
+                        <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-[11px] font-semibold">
+                          {item.defaultPermissions.maxListings === -1
+                            ? 'Ilimitado'
+                            : `Até ${item.defaultPermissions.maxListings} imóveis`}
+                        </span>
+                      </div>
                     </div>
 
                     <div>
@@ -581,8 +736,10 @@ export default function AdminLicensePanel() {
                       <span className="text-2xl font-extrabold text-gray-900 tabular-nums">
                         {item.priceLabel}
                       </span>
-                      {item.priceAOA > 0 && (
-                        <span className="text-xs font-semibold text-gray-400">/mês</span>
+                      {(item.billingPeriod ?? (item.priceAOA > 0 ? '/mês' : '')) && (
+                        <span className="text-xs font-semibold text-gray-400">
+                          {item.billingPeriod ?? '/mês'}
+                        </span>
                       )}
                     </div>
 
@@ -656,6 +813,7 @@ export default function AdminLicensePanel() {
                 <option value="active">Ativa</option>
                 <option value="pending">Pendente</option>
                 <option value="suspended">Suspensa</option>
+                <option value="blocked">Bloqueada</option>
                 <option value="expired">Expirada</option>
               </select>
             </div>
@@ -678,6 +836,7 @@ export default function AdminLicensePanel() {
                   const plan = u.subscriptionPlan || 'free';
                   const status = u.licenseStatus || 'active';
                   const isRootAdmin = u.email.toLowerCase() === ADMIN_EMAIL;
+                  const isConfirmingRowDel = confirmDeleteId === `usr-${u.uid}`;
 
                   return (
                     <tr key={u.uid} className="hover:bg-gray-50/70">
@@ -704,6 +863,8 @@ export default function AdminLicensePanel() {
                               ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                               : status === 'pending'
                               ? 'bg-amber-50 text-amber-800 border-amber-200'
+                              : status === 'suspended'
+                              ? 'bg-amber-100 text-amber-900 border-amber-300'
                               : 'bg-rose-50 text-rose-800 border-rose-200'
                           )}
                         >
@@ -713,6 +874,8 @@ export default function AdminLicensePanel() {
                             ? 'Pendente'
                             : status === 'suspended'
                             ? 'Suspensa'
+                            : status === 'blocked'
+                            ? 'Bloqueada'
                             : 'Expirada'}
                         </span>
                         {u.licenseNumber && (
@@ -732,13 +895,75 @@ export default function AdminLicensePanel() {
                         {!isRootAdmin && u.permissions?.verifiedBadge ? ' · Selo Verificado' : ''}
                       </td>
                       <td className="py-3.5 pl-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => setEditingUser(JSON.parse(JSON.stringify(u)))}
-                          className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-800 hover:bg-gray-100 cursor-pointer"
-                        >
-                          {isRootAdmin ? 'Ver Perfil Admin' : 'Gerir Licença'}
-                        </button>
+                        <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setEditingUser(JSON.parse(JSON.stringify(u)))}
+                            className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-800 hover:bg-gray-100 cursor-pointer"
+                          >
+                            {isRootAdmin ? 'Ver Perfil' : 'Gerir'}
+                          </button>
+
+                          {!isRootAdmin && (
+                            <>
+                              {status === 'suspended' || status === 'blocked' ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleModerateStatus(u.uid, u.displayName, 'active')}
+                                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 cursor-pointer"
+                                >
+                                  Reativar
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleModerateStatus(u.uid, u.displayName, 'suspended')}
+                                  className="px-2.5 py-1.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs font-semibold hover:bg-amber-100 cursor-pointer"
+                                >
+                                  Suspender
+                                </button>
+                              )}
+
+                              {status !== 'blocked' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleModerateStatus(u.uid, u.displayName, 'blocked')}
+                                  className="px-2.5 py-1.5 rounded-lg border border-rose-300 bg-rose-50 text-rose-800 text-xs font-semibold hover:bg-rose-100 cursor-pointer"
+                                >
+                                  Bloquear
+                                </button>
+                              )}
+
+                              {isConfirmingRowDel ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteTarget(u.uid, u.displayName)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 cursor-pointer"
+                                  >
+                                    Confirmar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmDeleteId(null)}
+                                    className="px-2 py-1.5 rounded-lg border border-gray-200 text-xs font-semibold text-gray-600 cursor-pointer"
+                                  >
+                                    Não
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(`usr-${u.uid}`)}
+                                  className="p-1.5 rounded-lg border border-gray-200 text-gray-500 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 cursor-pointer"
+                                  title="Eliminar conta"
+                                >
+                                  <Icons.Trash2 size={14} />
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -901,6 +1126,7 @@ export default function AdminLicensePanel() {
                       <option value="active">Ativa</option>
                       <option value="pending">Pendente</option>
                       <option value="suspended">Suspensa</option>
+                      <option value="blocked">Bloqueada</option>
                       <option value="expired">Expirada</option>
                     </select>
                   </div>
@@ -1022,33 +1248,30 @@ export default function AdminLicensePanel() {
                 editingPlanKey,
                 {
                   ...planForm,
-                  priceLabel: formatPlanPriceLabel(planForm.priceAOA),
+                  priceLabel:
+                    planForm.priceLabel.trim() || formatPlanPriceLabel(planForm.priceAOA),
                   features: parsedFeatures,
                 },
                 syncPlanUsers
               );
               setPlanCatalog(nextCatalog);
               showToast(`Pacote "${planForm.name}" atualizado com sucesso!`, 'success');
-              setEditingPlanKey(null);
-              setPlanForm(null);
+              closePlanModal();
             }}
             className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl border border-gray-200 space-y-5 max-h-[90vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-xl font-bold text-gray-900">
-                  Editar Pacote ({editingPlanKey.toUpperCase()})
+                  Editar Plano & Pacote ({editingPlanKey.toUpperCase()})
                 </h3>
                 <p className="text-xs text-gray-500">
-                  Atualize preço em Kwanzas, descrição, benefícios e permissões padrão.
+                  Atualize nome, preço, periodicidade, selos, descrição, benefícios e permissões.
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setEditingPlanKey(null);
-                  setPlanForm(null);
-                }}
+                onClick={closePlanModal}
                 className="text-gray-400 hover:text-gray-700 p-1 cursor-pointer"
               >
                 <Icons.X size={20} />
@@ -1058,7 +1281,7 @@ export default function AdminLicensePanel() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase block mb-1">
-                  Nome do Pacote
+                  Nome do Plano / Pacote
                 </label>
                 <input
                   required
@@ -1070,7 +1293,7 @@ export default function AdminLicensePanel() {
 
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase block mb-1">
-                  Preço Mensal (AOA / Kz)
+                  Preço (AOA / Kz)
                 </label>
                 <input
                   type="number"
@@ -1088,11 +1311,71 @@ export default function AdminLicensePanel() {
                   }}
                   className="input-field py-2 text-sm tabular-nums"
                 />
-                <span className="text-[11px] text-gray-400 mt-1 block">
-                  Exibição: <strong>{formatPlanPriceLabel(planForm.priceAOA)}</strong>
-                </span>
               </div>
             </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase block mb-1">
+                  Rótulo de Preço Exibido
+                </label>
+                <input
+                  required
+                  value={planForm.priceLabel}
+                  onChange={(e) => setPlanForm({ ...planForm, priceLabel: e.target.value })}
+                  placeholder="Ex: 25.000 Kz ou Grátis"
+                  className="input-field py-2 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase block mb-1">
+                  Periodicidade
+                </label>
+                <input
+                  value={planForm.billingPeriod ?? ''}
+                  onChange={(e) => setPlanForm({ ...planForm, billingPeriod: e.target.value })}
+                  placeholder="Ex: /mês, /ano (ou vazio)"
+                  className="input-field py-2 text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase block mb-1">
+                  Selo / Etiqueta de Destaque
+                </label>
+                <input
+                  value={planForm.badgeText ?? ''}
+                  onChange={(e) => setPlanForm({ ...planForm, badgeText: e.target.value })}
+                  placeholder="Ex: Mais Popular, Recomendado"
+                  className="input-field py-2 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase block mb-1">
+                  Texto do Botão (CTA)
+                </label>
+                <input
+                  value={planForm.ctaLabel ?? ''}
+                  onChange={(e) => setPlanForm({ ...planForm, ctaLabel: e.target.value })}
+                  placeholder={`Ex: Escolher ${planForm.name}`}
+                  className="input-field py-2 text-sm"
+                />
+              </div>
+            </div>
+
+            <label className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-rose-50/40 border border-rose-200 text-xs font-semibold text-gray-800 cursor-pointer">
+              <span>Destacar este pacote visualmente na página de Planos</span>
+              <input
+                type="checkbox"
+                checked={Boolean(planForm.highlighted)}
+                onChange={(e) => setPlanForm({ ...planForm, highlighted: e.target.checked })}
+                className="w-4 h-4 accent-brand-primary cursor-pointer"
+              />
+            </label>
 
             <div>
               <label className="text-xs font-bold text-gray-500 uppercase block mb-1">
@@ -1190,10 +1473,7 @@ export default function AdminLicensePanel() {
             <div className="flex gap-3 pt-1">
               <button
                 type="button"
-                onClick={() => {
-                  setEditingPlanKey(null);
-                  setPlanForm(null);
-                }}
+                onClick={closePlanModal}
                 className="flex-1 btn-outline py-2.5 text-sm"
               >
                 Cancelar

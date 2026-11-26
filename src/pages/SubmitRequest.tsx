@@ -14,6 +14,7 @@ import {
   getProperties,
 } from '../lib/dataService';
 import { useToast } from '../components/ui/Toast';
+import AgentFeeTermsBox from '../components/ui/AgentFeeTermsBox';
 
 export default function SubmitRequest() {
   const { user } = useAuth();
@@ -63,12 +64,17 @@ export default function SubmitRequest() {
   }, [user, preselectedAgentId]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [featureInHighlights, setFeatureInHighlights] = useState(true);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   const ownPropertiesCount = user
     ? getProperties().filter((p) => p.agentId === user.uid || p.ownerId === user.uid).length
     : 0;
   const maxAllowed = user?.permissions?.maxListings ?? 10;
-  const isSuspended = user?.licenseStatus === 'suspended' || user?.licenseStatus === 'expired';
+  const isSuspended =
+    user?.licenseStatus === 'suspended' ||
+    user?.licenseStatus === 'blocked' ||
+    user?.licenseStatus === 'expired';
   const quotaReached =
     publishMode === 'direct' && maxAllowed !== -1 && ownPropertiesCount >= maxAllowed;
 
@@ -86,7 +92,7 @@ export default function SubmitRequest() {
     setUploadingPhotos(true);
     try {
       const compressed = await Promise.all(
-        filesToProcess.map((f) => compressImageFile(f, 1200, 0.8))
+        filesToProcess.map((f) => compressImageFile(f, 850, 0.68))
       );
       setUploadedImages((prev) => [...prev, ...compressed]);
       showToast(`${compressed.length} foto(s) carregada(s) com sucesso.`, 'success');
@@ -147,6 +153,11 @@ export default function SubmitRequest() {
       return;
     }
 
+    if (!acceptedTerms) {
+      showToast('Aceite os Termos e Condições da taxa do agente antes de submeter.', 'error');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const coords = getCoordinatesForLocation(formData.province, formData.city);
@@ -158,6 +169,7 @@ export default function SubmitRequest() {
           price: Number(formData.price) || 100000,
           type: formData.propertyType,
           category: formData.propertyType === 'luxury' ? 'luxury' : 'featured',
+          isFeatured: featureInHighlights,
           location: {
             province: formData.province,
             city: formData.city.trim() || formData.province,
@@ -195,6 +207,8 @@ export default function SubmitRequest() {
           propertyImages: uploadedImages,
           assignedAgentId: selectedAgent?.id || 'a1',
           notificationMethod: formData.notificationMethod,
+          acceptedAgentFeeTerms: true,
+          acceptedTermsAt: Date.now(),
           status: 'pending',
           createdAt: Date.now(),
         });
@@ -204,7 +218,7 @@ export default function SubmitRequest() {
       setStep(4);
       showToast(
         publishMode === 'direct'
-          ? 'Imóvel publicado com sucesso!'
+          ? 'Imóvel publicado com sucesso nos Destaques e Catálogo!'
           : 'Solicitação enviada ao agente escolhido!',
         'success'
       );
@@ -603,7 +617,7 @@ export default function SubmitRequest() {
               >
                 <p className="font-bold text-gray-900">Publicar Diretamente</p>
                 <p className="text-xs text-gray-500 mt-1">
-                  O imóvel entra imediatamente no catálogo e no seu Painel (Meus Imóveis).
+                  O imóvel entra imediatamente no catálogo, em Destaques em Angola e no seu Painel.
                 </p>
               </button>
 
@@ -623,6 +637,23 @@ export default function SubmitRequest() {
                 </p>
               </button>
             </div>
+
+            {publishMode === 'direct' && (
+              <label className="flex items-center justify-between gap-3 p-4 rounded-2xl border border-gray-200 bg-gray-50 cursor-pointer">
+                <div>
+                  <p className="text-sm font-bold text-gray-900">Exibir em Destaques em Angola</p>
+                  <p className="text-xs text-gray-500">
+                    Coloca o imóvel na secção principal da página inicial logo após a publicação.
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={featureInHighlights}
+                  onChange={(e) => setFeatureInHighlights(e.target.checked)}
+                  className="w-4 h-4 accent-brand-primary cursor-pointer shrink-0"
+                />
+              </label>
+            )}
 
             {publishMode === 'agent' && (
               <div className="space-y-3">
@@ -729,14 +760,27 @@ export default function SubmitRequest() {
               </div>
             </div>
 
+            <AgentFeeTermsBox
+              accepted={acceptedTerms}
+              onChange={setAcceptedTerms}
+              estimatedPrice={Number(formData.price) || undefined}
+              contextLabel={
+                publishMode === 'agent'
+                  ? `a mediação com ${selectedAgent?.name || 'o agente parceiro'}`
+                  : 'a publicação e eventual mediação na Ki-Imóveis'
+              }
+            />
+
             <div className="flex gap-4">
               <button type="button" onClick={() => setStep(2)} className="flex-1 btn-outline">
                 Voltar
               </button>
               <button
                 type="submit"
-                className="flex-1 btn-primary"
-                disabled={!formData.phone || isSubmitting || isSuspended || quotaReached}
+                className="flex-1 btn-primary disabled:opacity-50"
+                disabled={
+                  !formData.phone || !acceptedTerms || isSubmitting || isSuspended || quotaReached
+                }
               >
                 {isSubmitting
                   ? 'A processar...'

@@ -12,9 +12,11 @@ import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/supabase';
 import { ASSETS } from '@/src/lib/assets';
 import {
+  addProperty,
   DATA_UPDATED_EVENT,
   deleteProperty,
   emitDataUpdate,
+  getCoordinatesForLocation,
   getPlanCatalog,
   getProperties,
   getVisitRequests,
@@ -243,6 +245,68 @@ export default function Dashboard() {
     });
     showToast('Alterações ao imóvel guardadas com sucesso.', 'success');
     setEditingProperty(null);
+  };
+
+  const handleToggleFeatured = (prop: Property) => {
+    const nextFeatured = !(prop.isFeatured ?? prop.category === 'featured');
+    updateProperty(prop.id, {
+      isFeatured: nextFeatured,
+      category: nextFeatured ? (prop.type === 'luxury' ? 'luxury' : 'featured') : prop.type,
+    });
+    showToast(
+      nextFeatured
+        ? `"${prop.title}" promovido para Destaques em Angola!`
+        : `"${prop.title}" removido dos Destaques principais.`,
+      'success'
+    );
+  };
+
+  const handlePublishRequestToHighlights = async (req: PropertyRequest) => {
+    if (!user || isRootAdmin) return;
+    const coords = getCoordinatesForLocation(req.location, req.address);
+    const validType: Property['type'] =
+      req.propertyType === 'house' ||
+      req.propertyType === 'luxury' ||
+      req.propertyType === 'commercial'
+        ? req.propertyType
+        : 'apartment';
+
+    addProperty({
+      title: req.propertyTitle,
+      description: req.propertyDescription || 'Imóvel verificado e publicado por agente parceiro Ki-Imóveis.',
+      price: Number(req.estimatedValue) || 35000000,
+      type: validType,
+      category: validType === 'luxury' ? 'luxury' : 'featured',
+      isFeatured: true,
+      location: {
+        province: req.location || 'Luanda',
+        city: req.address?.split(',')[0]?.trim() || req.location || 'Luanda',
+        address: req.address || req.location || 'Luanda',
+        lat: coords.lat,
+        lng: coords.lng,
+      },
+      details: {
+        bedrooms: 3,
+        bathrooms: 2,
+        area: 140,
+        furnished: true,
+      },
+      amenities: ['Segurança 24h', 'Estacionamento'],
+      images:
+        req.propertyImages && req.propertyImages.length > 0
+          ? req.propertyImages
+          : [ASSETS.propVianaVilla],
+      agentId: user.uid,
+      ownerId: req.ownerId,
+      status: 'sale',
+      availabilityStatus: 'available',
+      isVerified: Boolean(user.verified),
+      rating: 4.95,
+    });
+
+    await handleUpdateRequestStatus(req, 'completed');
+    showToast(`"${req.propertyTitle}" publicado nos Destaques em Angola!`, 'success');
+    setSelectedRequest(null);
   };
 
   const handleConfirmDeleteProperty = (id: string) => {
@@ -486,14 +550,24 @@ export default function Dashboard() {
 
             <div className="flex items-center gap-3 shrink-0">
               {isRootAdmin ? (
-                <button
-                  type="button"
-                  onClick={() => selectTab('admin')}
-                  className="btn-primary flex items-center gap-2 text-sm py-2.5 px-4 bg-gray-900 hover:bg-gray-800"
-                >
-                  <Icons.KeyRound size={17} />
-                  <span>Licenças & Agentes</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/dashboard?tab=admin&section=packages')}
+                    className="btn-outline flex items-center gap-2 text-sm py-2.5 px-3.5"
+                  >
+                    <Icons.Gem size={16} className="text-brand-primary" />
+                    <span className="hidden md:inline">Planos & Pacotes</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => selectTab('admin')}
+                    className="btn-primary flex items-center gap-2 text-sm py-2.5 px-4 bg-gray-900 hover:bg-gray-800"
+                  >
+                    <Icons.KeyRound size={17} />
+                    <span>Licenças & Agentes</span>
+                  </button>
+                </div>
               ) : (
                 <button
                   type="button"
@@ -514,6 +588,18 @@ export default function Dashboard() {
               </button>
             </div>
           </div>
+
+          {licenseStatus === 'suspended' && !isRootAdmin && (
+            <div className="mb-6 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-sm flex items-start gap-3">
+              <Icons.PauseCircle size={18} className="text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Conta temporariamente suspensa</p>
+                <p className="text-xs mt-0.5">
+                  A sua licença de agente/agência foi suspensa pela administração. A publicação de novos imóveis encontra-se desativada até reativação.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* TAB 1: LISTINGS & FAVORITES */}
           {activeTab === 'listings' && (
@@ -598,6 +684,29 @@ export default function Dashboard() {
                             </div>
 
                             <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleFeatured(prop)}
+                                title="Alternar visibilidade em Destaques em Angola"
+                                className={cn(
+                                  'px-3 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer',
+                                  prop.isFeatured ?? prop.category === 'featured'
+                                    ? 'bg-amber-50 border-amber-300 text-amber-800'
+                                    : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                                )}
+                              >
+                                <Icons.Star
+                                  size={13}
+                                  className={
+                                    prop.isFeatured ?? prop.category === 'featured' ? 'fill-current' : ''
+                                  }
+                                />
+                                <span>
+                                  {prop.isFeatured ?? prop.category === 'featured'
+                                    ? 'Em Destaque'
+                                    : 'Destacar'}
+                                </span>
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => setEditingProperty(JSON.parse(JSON.stringify(prop)))}
@@ -1063,7 +1172,25 @@ export default function Dashboard() {
                   </p>
                 )}
 
-                {!isRootAdmin && (
+                {isRootAdmin ? (
+                  <div className="flex flex-wrap gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => navigate('/dashboard?tab=admin&section=packages')}
+                      className="px-4 py-2 rounded-xl bg-white text-gray-900 text-xs font-bold hover:bg-gray-100 cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Icons.Edit3 size={14} />
+                      <span>Editar Informações de Planos e Pacotes</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/dashboard?tab=admin&section=agents')}
+                      className="px-4 py-2 rounded-xl bg-white/10 text-white text-xs font-bold hover:bg-white/20 cursor-pointer"
+                    >
+                      Gerir Agentes & Agências
+                    </button>
+                  </div>
+                ) : (
                   <div className="flex flex-wrap gap-3 pt-2">
                     {currentPlan !== 'silver' && (
                       <button
@@ -1438,6 +1565,15 @@ export default function Dashboard() {
             <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
               {user.role !== 'user' && (
                 <>
+                  {!isRootAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => void handlePublishRequestToHighlights(selectedRequest)}
+                      className="px-4 py-2 rounded-xl bg-brand-primary text-white text-xs font-semibold hover:bg-rose-600 cursor-pointer"
+                    >
+                      Publicar nos Destaques
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => handleUpdateRequestStatus(selectedRequest, 'claimed')}

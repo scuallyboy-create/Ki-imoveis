@@ -5,30 +5,39 @@ import { Icons } from '../components/ui/Icons';
 import { cn, formatCurrency, getUSDToAOA } from '@/src/lib/utils';
 import GooglePropertyMap from '../components/maps/GooglePropertyMap';
 import {
+  acceptVisitTerms,
   createVisitRequest,
   DATA_UPDATED_EVENT,
   getAgentById,
   getCoordinatesForLocation,
   getPropertyById,
+  hasAcceptedVisitTerms,
 } from '@/src/lib/dataService';
 import { useAuth } from '@/src/hooks/useAuth';
 import { useToast } from '@/src/components/ui/Toast';
+import { useCompare } from '@/src/context/CompareContext';
 import { AvailabilityStatus, GroundedPlaceLink } from '@/src/types';
+import { safeParseJsonResponse } from '@/src/lib/http';
+import AgentFeeTermsBox from '@/src/components/ui/AgentFeeTermsBox';
+import TermsOfServiceModal from '@/src/components/ui/TermsOfServiceModal';
 
 export default function PropertyDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user, toggleFavorite } = useAuth();
   const { showToast } = useToast();
+  const { isComparing, toggleCompare } = useCompare();
 
   const [property, setProperty] = useState(() => (id ? getPropertyById(id) : undefined));
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [bookingModal, setBookingModal] = useState<'visit' | 'rent' | 'buy' | null>(null);
+  const [tosModalOpen, setTosModalOpen] = useState(false);
   const [visitDate, setVisitDate] = useState('2026-12-10');
   const [visitTime, setVisitTime] = useState('10:00');
   const [visitPhone, setVisitPhone] = useState(user?.phoneNumber || '');
   const [visitMessage, setVisitMessage] = useState('');
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   // Google Maps Grounding neighborhood insights state
   const [groundingQuery, setGroundingQuery] = useState('');
@@ -100,18 +109,41 @@ export default function PropertyDetails() {
   };
 
   const handleOpenBooking = (mode: 'visit' | 'rent' | 'buy') => {
+    if (mode === 'visit' && !hasAcceptedVisitTerms(user?.uid)) {
+      setTosModalOpen(true);
+      return;
+    }
     if (!user) {
       showToast('Faça login para agendar visitas ou enviar propostas.', 'info');
       navigate('/auth');
       return;
     }
     setVisitPhone(user.phoneNumber || '');
+    setAcceptedTerms(mode === 'visit' ? hasAcceptedVisitTerms(user.uid) : false);
     setBookingModal(mode);
+  };
+
+  const handleAcceptVisitTos = () => {
+    acceptVisitTerms(user?.uid);
+    setTosModalOpen(false);
+    if (!user) {
+      showToast('Termos de Serviço aceites! Faça login para concluir a solicitação de visita.', 'success');
+      navigate('/auth');
+      return;
+    }
+    setVisitPhone(user.phoneNumber || '');
+    setAcceptedTerms(true);
+    setBookingModal('visit');
+    showToast('Termos de Serviço aceites. Selecione a data e hora da sua visita.', 'success');
   };
 
   const handleConfirmBooking = (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !bookingModal) return;
+    if (!acceptedTerms) {
+      showToast('Aceite os Termos e Condições da taxa do agente para continuar.', 'error');
+      return;
+    }
     createVisitRequest({
       propertyId: property.id,
       propertyTitle: property.title,
@@ -125,9 +157,12 @@ export default function PropertyDetails() {
       time: visitTime,
       intent: bookingModal,
       message: visitMessage,
+      acceptedAgentFeeTerms: true,
+      acceptedTermsAt: Date.now(),
     });
     setBookingModal(null);
     setVisitMessage('');
+    setAcceptedTerms(false);
     showToast(
       bookingModal === 'visit'
         ? 'Visita agendada com sucesso! Receberá alertas por e-mail sobre a confirmação.'
@@ -155,13 +190,17 @@ export default function PropertyDetails() {
           locationLabel: `${property.location.address}, ${property.location.city}, ${property.location.province}, Angola`,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error || 'Não foi possível consultar os arredores.');
+      const parsed = await safeParseJsonResponse<{
+        text?: string;
+        places?: GroundedPlaceLink[];
+        error?: string;
+      }>(res, 'Não foi possível consultar os arredores.');
+      if (!parsed.ok || !parsed.data) {
+        throw new Error(parsed.errorMessage || 'Não foi possível consultar os arredores.');
       }
       setGroundingResult({
-        text: data.text || '',
-        places: Array.isArray(data.places) ? data.places : [],
+        text: parsed.data.text || '',
+        places: Array.isArray(parsed.data.places) ? parsed.data.places : [],
       });
     } catch (err: any) {
       setGroundingError(err?.message || 'Erro ao pesquisar pontos de interesse.');
@@ -208,7 +247,18 @@ export default function PropertyDetails() {
             <h1 className="text-2xl md:text-3xl font-bold text-gray-900">{property.title}</h1>
           </div>
 
-          <div className="flex gap-3 shrink-0">
+          <div className="flex flex-wrap gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => toggleCompare(property)}
+              className={cn(
+                'btn-outline px-4 py-2 text-sm flex items-center gap-2',
+                isComparing(property.id) && 'bg-gray-900 text-white border-gray-900 hover:bg-gray-800'
+              )}
+            >
+              <Icons.ArrowLeftRight size={15} />
+              {isComparing(property.id) ? 'Na Comparação' : 'Comparar'}
+            </button>
             <button
               type="button"
               onClick={handleShare}
@@ -488,7 +538,7 @@ export default function PropertyDetails() {
                   onClick={() => handleOpenBooking('visit')}
                   className="w-full btn-outline py-3 text-sm font-semibold"
                 >
-                  Agendar Visita Presencial
+                  Solicitar Visita
                 </button>
               </div>
 
@@ -640,6 +690,21 @@ export default function PropertyDetails() {
                   className="input-field py-2.5 text-sm"
                 />
               </div>
+
+              <AgentFeeTermsBox
+                accepted={acceptedTerms}
+                onChange={setAcceptedTerms}
+                estimatedPrice={property.price}
+                contextLabel={
+                  bookingModal === 'buy'
+                    ? 'esta proposta de compra'
+                    : bookingModal === 'rent'
+                    ? 'este pedido de arrendamento'
+                    : 'este agendamento de visita'
+                }
+                compact
+              />
+
               <div className="flex gap-3 pt-2">
                 <button
                   type="button"
@@ -648,7 +713,11 @@ export default function PropertyDetails() {
                 >
                   Cancelar
                 </button>
-                <button type="submit" className="flex-1 btn-primary py-2.5 text-sm">
+                <button
+                  type="submit"
+                  disabled={!acceptedTerms}
+                  className="flex-1 btn-primary py-2.5 text-sm disabled:opacity-50"
+                >
                   Confirmar
                 </button>
               </div>
@@ -656,6 +725,15 @@ export default function PropertyDetails() {
           </div>
         </div>
       )}
+
+      <TermsOfServiceModal
+        isOpen={tosModalOpen}
+        onAccept={handleAcceptVisitTos}
+        onCancel={() => setTosModalOpen(false)}
+        propertyTitle={property.title}
+        estimatedPrice={property.price}
+        propertyStatus={property.status}
+      />
     </motion.div>
   );
 }

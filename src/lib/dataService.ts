@@ -23,7 +23,39 @@ const PROPERTIES_KEY = 'ki_imoveis_properties_v1';
 const VISITS_KEY = 'ki_imoveis_visits_v1';
 const EVALUATIONS_KEY = 'ki_imoveis_agent_evaluations_v1';
 const PLAN_CATALOG_KEY = 'ki_imoveis_plan_catalog_v1';
+const DELETED_AGENTS_KEY = 'ki_imoveis_deleted_agents_v1';
+const VISIT_TOS_KEY = 'ki_imoveis_visit_tos_v1';
 export const DATA_UPDATED_EVENT = 'ki-data-updated';
+
+export function hasAcceptedVisitTerms(userId?: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = localStorage.getItem(VISIT_TOS_KEY);
+    if (!raw) return false;
+    const store = JSON.parse(raw);
+    const key = userId ? String(userId) : 'guest';
+    return Boolean(store?.[key]?.accepted);
+  } catch {
+    return false;
+  }
+}
+
+export function acceptVisitTerms(userId?: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = localStorage.getItem(VISIT_TOS_KEY);
+    const store = raw ? JSON.parse(raw) : {};
+    const record = { accepted: true, acceptedAt: Date.now(), version: '1.0' };
+    if (userId) {
+      store[String(userId)] = record;
+    } else {
+      store.guest = record;
+    }
+    localStorage.setItem(VISIT_TOS_KEY, JSON.stringify(store));
+  } catch {
+    // Safe ignore
+  }
+}
 
 export function emitDataUpdate() {
   if (typeof window !== 'undefined') {
@@ -314,11 +346,60 @@ const SEEDED_PROPERTIES: Property[] = [
   },
 ];
 
+function getDeletedAgentRecords(): { ids: string[]; emails: string[] } {
+  if (typeof window === 'undefined') return { ids: [], emails: [] };
+  try {
+    const raw = JSON.parse(localStorage.getItem(DELETED_AGENTS_KEY) || '{}');
+    return {
+      ids: Array.isArray(raw?.ids) ? raw.ids : [],
+      emails: Array.isArray(raw?.emails) ? raw.emails.map((e: string) => e.toLowerCase()) : [],
+    };
+  } catch {
+    return { ids: [], emails: [] };
+  }
+}
+
+export function isAccountDeleted(uid?: string, email?: string): boolean {
+  const deleted = getDeletedAgentRecords();
+  if (uid && deleted.ids.includes(uid)) return true;
+  if (email && deleted.emails.includes(email.trim().toLowerCase())) return true;
+  return false;
+}
+
+export function isAgentBlocked(agentId?: string): boolean {
+  if (!agentId || typeof window === 'undefined') return false;
+  if (isAccountDeleted(agentId)) return true;
+  try {
+    const profiles: any[] = JSON.parse(localStorage.getItem('offline_db_profiles') || '[]');
+    const match = profiles.find((p) => p.id === agentId || p.uid === agentId);
+    return match?.licenseStatus === 'blocked';
+  } catch {
+    return false;
+  }
+}
+
+function savePropertiesSafely(list: Property[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(PROPERTIES_KEY, JSON.stringify(list));
+  } catch {
+    // Trim extra base64 gallery images on older listings if localStorage quota is tight
+    const compacted = list.map((item, idx) => {
+      if (idx === 0) return item;
+      if (Array.isArray(item.images) && item.images.length > 2) {
+        return { ...item, images: item.images.slice(0, 2) };
+      }
+      return item;
+    });
+    localStorage.setItem(PROPERTIES_KEY, JSON.stringify(compacted));
+  }
+}
+
 export function getProperties(): Property[] {
   if (typeof window === 'undefined') return SEEDED_PROPERTIES;
   const raw = localStorage.getItem(PROPERTIES_KEY);
   if (!raw) {
-    localStorage.setItem(PROPERTIES_KEY, JSON.stringify(SEEDED_PROPERTIES));
+    savePropertiesSafely(SEEDED_PROPERTIES);
     return SEEDED_PROPERTIES;
   }
   try {
@@ -329,6 +410,10 @@ export function getProperties(): Property[] {
   }
 }
 
+export function getPublicProperties(): Property[] {
+  return getProperties().filter((p) => !isAgentBlocked(p.agentId));
+}
+
 export function getPropertyById(id: string): Property | undefined {
   return getProperties().find((p) => p.id === id);
 }
@@ -337,11 +422,12 @@ export function addProperty(input: Omit<Property, 'id' | 'createdAt' | 'updatedA
   const properties = getProperties();
   const created: Property = {
     ...input,
+    isFeatured: input.isFeatured ?? true,
     id: 'prop-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
-  localStorage.setItem(PROPERTIES_KEY, JSON.stringify([created, ...properties]));
+  savePropertiesSafely([created, ...properties]);
   emitDataUpdate();
   return created;
 }
@@ -357,7 +443,7 @@ export function updateProperty(id: string, updates: Partial<Property>): Property
     }
     return p;
   });
-  localStorage.setItem(PROPERTIES_KEY, JSON.stringify(next));
+  savePropertiesSafely(next);
   emitDataUpdate();
 
   if (
@@ -424,7 +510,7 @@ export function updateProperty(id: string, updates: Partial<Property>): Property
 export function deleteProperty(id: string) {
   const properties = getProperties();
   const next = properties.filter((p) => p.id !== id);
-  localStorage.setItem(PROPERTIES_KEY, JSON.stringify(next));
+  savePropertiesSafely(next);
   emitDataUpdate();
 }
 
@@ -438,6 +524,7 @@ export interface PropertySearchFilters {
   availability?: 'all' | AvailabilityStatus;
   agentId?: string;
   sort?: 'recent' | 'price_asc' | 'price_desc';
+  featuredFirst?: boolean;
 }
 
 function normalizeText(value: string): string {
@@ -496,6 +583,14 @@ export function filterProperties(properties: Property[], filters: PropertySearch
   }
   if (filters.sort === 'price_desc') {
     return [...result].sort((a, b) => b.price - a.price);
+  }
+  if (filters.featuredFirst) {
+    return [...result].sort((a, b) => {
+      const aFeat = a.isFeatured || a.category === 'featured' ? 1 : 0;
+      const bFeat = b.isFeatured || b.category === 'featured' ? 1 : 0;
+      if (bFeat !== aFeat) return bFeat - aFeat;
+      return b.createdAt - a.createdAt;
+    });
   }
   return [...result].sort((a, b) => b.createdAt - a.createdAt);
 }
@@ -574,7 +669,7 @@ export function evaluateAgent(
 }
 
 // --- AGENTS DIRECTORY (merges seeded agents + approved registered agents) ---
-export function getAllAgents(): AgentDirectoryItem[] {
+export function getAllAgents(includeModerated = false): AgentDirectoryItem[] {
   ensureSeededLocalDb();
   const profiles: any[] =
     typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('offline_db_profiles') || '[]') : [];
@@ -582,14 +677,18 @@ export function getAllAgents(): AgentDirectoryItem[] {
 
   const mergedMap = new Map<string, AgentDirectoryItem>();
   for (const ag of DEFAULT_AGENTS) {
+    if (isAccountDeleted(ag.id, ag.email)) continue;
     const matchingProfile = profiles.find((p) => p.id === ag.id || p.email === ag.email);
+    const status = matchingProfile?.licenseStatus || 'active';
+    if (!includeModerated && status === 'blocked') continue;
     const adminEval = evals[ag.id] || matchingProfile?.adminEvaluation;
     mergedMap.set(ag.id, {
       ...ag,
       verified: matchingProfile ? Boolean(matchingProfile.verified) : ag.verified,
       subscriptionPlan: matchingProfile?.subscriptionPlan || ag.subscriptionPlan,
-      licenseStatus: matchingProfile?.licenseStatus || 'active',
+      licenseStatus: status,
       licenseNumber: matchingProfile?.licenseNumber,
+      statusReason: matchingProfile?.statusReason,
       rating: adminEval?.rating ?? matchingProfile?.rating ?? ag.rating,
       adminEvaluation: adminEval,
       image: matchingProfile?.photoURL || ag.image,
@@ -598,7 +697,10 @@ export function getAllAgents(): AgentDirectoryItem[] {
   }
 
   for (const p of profiles) {
+    if (isAccountDeleted(p.id, p.email)) continue;
     if ((p.role === 'agent' || p.role === 'agency_admin') && !mergedMap.has(p.id)) {
+      const status = p.licenseStatus || 'active';
+      if (!includeModerated && status === 'blocked') continue;
       const adminEval = evals[p.id] || p.adminEvaluation;
       mergedMap.set(p.id, {
         id: p.id,
@@ -617,8 +719,9 @@ export function getAllAgents(): AgentDirectoryItem[] {
         closedDeals: 15,
         responseRate: '96%',
         subscriptionPlan: p.subscriptionPlan || 'free',
-        licenseStatus: p.licenseStatus || 'active',
+        licenseStatus: status,
         licenseNumber: p.licenseNumber,
+        statusReason: p.statusReason,
         adminEvaluation: adminEval,
       });
     }
@@ -627,8 +730,8 @@ export function getAllAgents(): AgentDirectoryItem[] {
   return Array.from(mergedMap.values());
 }
 
-export function getAgentById(id: string): AgentDirectoryItem | undefined {
-  return getAllAgents().find((a) => a.id === id);
+export function getAgentById(id: string, includeModerated = false): AgentDirectoryItem | undefined {
+  return getAllAgents(includeModerated).find((a) => a.id === id);
 }
 
 // --- VISITS ---
@@ -818,6 +921,14 @@ export function updatePlanCatalogItem(
         : updates.priceAOA !== undefined
         ? formatPlanPriceLabel(nextPriceAOA)
         : current.priceLabel,
+    billingPeriod:
+      updates.billingPeriod !== undefined ? updates.billingPeriod.trim() : current.billingPeriod,
+    badgeText:
+      updates.badgeText !== undefined ? updates.badgeText.trim() : current.badgeText,
+    highlighted:
+      updates.highlighted !== undefined ? Boolean(updates.highlighted) : current.highlighted,
+    ctaLabel:
+      updates.ctaLabel !== undefined ? updates.ctaLabel.trim() : current.ctaLabel,
     features: updates.features
       ? updates.features.map((f) => f.trim()).filter(Boolean)
       : current.features,
@@ -870,23 +981,25 @@ export function getAllUserProfiles(): UserProfile[] {
   if (typeof window === 'undefined') return [];
   const catalog = getPlanCatalog();
   const raw: any[] = JSON.parse(localStorage.getItem('offline_db_profiles') || '[]');
-  return raw.map((p) => {
-    const isAdmin = p.email?.toLowerCase() === ADMIN_EMAIL;
-    const plan: SubscriptionPlan = isAdmin ? 'gold' : p.subscriptionPlan || 'free';
-    return {
-      ...p,
-      uid: p.id || p.uid,
-      email: p.email || '',
-      displayName: p.displayName || p.full_name || p.email?.split('@')[0] || 'Usuário',
-      role: isAdmin ? 'admin' : p.role || 'user',
-      favorites: Array.isArray(p.favorites) ? p.favorites : [],
-      subscriptionPlan: plan,
-      licenseStatus: isAdmin ? 'active' : p.licenseStatus || 'active',
-      permissions: isAdmin
-        ? ADMIN_MANAGEMENT_PERMISSIONS
-        : p.permissions || catalog[plan].defaultPermissions,
-    } as UserProfile;
-  });
+  return raw
+    .filter((p) => !isAccountDeleted(p.id || p.uid, p.email))
+    .map((p) => {
+      const isAdmin = p.email?.toLowerCase() === ADMIN_EMAIL;
+      const plan: SubscriptionPlan = isAdmin ? 'gold' : p.subscriptionPlan || 'free';
+      return {
+        ...p,
+        uid: p.id || p.uid,
+        email: p.email || '',
+        displayName: p.displayName || p.full_name || p.email?.split('@')[0] || 'Usuário',
+        role: isAdmin ? 'admin' : p.role || 'user',
+        favorites: Array.isArray(p.favorites) ? p.favorites : [],
+        subscriptionPlan: plan,
+        licenseStatus: isAdmin ? 'active' : p.licenseStatus || 'active',
+        permissions: isAdmin
+          ? ADMIN_MANAGEMENT_PERMISSIONS
+          : p.permissions || catalog[plan].defaultPermissions,
+      } as UserProfile;
+    });
 }
 
 export function adminUpdateUserProfile(uid: string, updates: Partial<UserProfile>): UserProfile | null {
@@ -904,6 +1017,143 @@ export function adminUpdateUserProfile(uid: string, updates: Partial<UserProfile
   localStorage.setItem('offline_db_profiles', JSON.stringify(next));
   emitDataUpdate();
   return updated;
+}
+
+export function setAccountModerationStatus(
+  targetId: string,
+  nextStatus: 'active' | 'suspended' | 'blocked',
+  reason?: string
+): UserProfile | null {
+  ensureSeededLocalDb();
+  if (typeof window === 'undefined') return null;
+
+  const profiles: any[] = JSON.parse(localStorage.getItem('offline_db_profiles') || '[]');
+  let targetProfile = profiles.find((p) => p.id === targetId || p.uid === targetId);
+
+  if (!targetProfile) {
+    const seededAgent = DEFAULT_AGENTS.find((a) => a.id === targetId);
+    if (seededAgent) {
+      targetProfile = {
+        id: seededAgent.id,
+        email: seededAgent.email,
+        displayName: seededAgent.name,
+        role: seededAgent.type === 'agency' ? 'agency_admin' : 'agent',
+        subscriptionPlan: seededAgent.subscriptionPlan || 'silver',
+        licenseStatus: 'active',
+        verified: seededAgent.verified,
+        permissions: getDefaultPermissionsForPlan(seededAgent.subscriptionPlan || 'silver'),
+        phoneNumber: seededAgent.phone,
+        address: seededAgent.location,
+        favorites: [],
+        createdAt: Date.now(),
+      };
+      profiles.push(targetProfile);
+    }
+  }
+
+  if (!targetProfile) return null;
+  if (targetProfile.email?.toLowerCase() === ADMIN_EMAIL) return null;
+
+  const plan: SubscriptionPlan = targetProfile.subscriptionPlan || 'free';
+  const basePermissions = getDefaultPermissionsForPlan(plan);
+  const nextPermissions: UserPermissions =
+    nextStatus === 'active'
+      ? basePermissions
+      : {
+          ...basePermissions,
+          canPublishListings: false,
+          canFeatureListings: false,
+          canAccessLeads: false,
+          verifiedBadge: false,
+        };
+
+  const nextProfiles = profiles.map((p) => {
+    if (p.id === targetId || p.uid === targetId) {
+      return {
+        ...p,
+        licenseStatus: nextStatus,
+        verified: nextStatus === 'active' ? basePermissions.verifiedBadge : false,
+        permissions: nextPermissions,
+        statusReason: reason || (nextStatus === 'active' ? '' : p.statusReason),
+        updatedAt: Date.now(),
+      };
+    }
+    return p;
+  });
+
+  localStorage.setItem('offline_db_profiles', JSON.stringify(nextProfiles));
+  emitDataUpdate();
+
+  const statusText =
+    nextStatus === 'blocked'
+      ? 'BLOQUEADA'
+      : nextStatus === 'suspended'
+      ? 'SUSPENSA'
+      : 'REATIVADA';
+
+  if (targetProfile.email) {
+    void dispatchNotification({
+      userId: targetProfile.id || targetId,
+      userEmail: targetProfile.email,
+      recipientName: targetProfile.displayName,
+      type: 'license_status_changed',
+      title: `Conta ${statusText} pela Administração`,
+      message:
+        nextStatus === 'active'
+          ? 'A sua conta de agente/agência foi reativada pela administração Ki-Imóveis e já pode publicar imóveis.'
+          : `A sua conta foi ${statusText.toLowerCase()} pela administração Ki-Imóveis.${reason ? ` Motivo: ${reason}` : ''}`,
+      emailSubject: `[Ki-Imóveis] Estatuto da conta atualizado: ${statusText}`,
+      relatedId: targetId,
+      link: '/dashboard?tab=settings',
+    });
+  }
+
+  return nextProfiles.find((p) => p.id === targetId || p.uid === targetId) || null;
+}
+
+export function deleteAgentOrAgency(targetId: string, removeListings = true): boolean {
+  ensureSeededLocalDb();
+  if (typeof window === 'undefined') return false;
+
+  const profiles: any[] = JSON.parse(localStorage.getItem('offline_db_profiles') || '[]');
+  const matchProfile = profiles.find((p) => p.id === targetId || p.uid === targetId);
+  const matchSeeded = DEFAULT_AGENTS.find((a) => a.id === targetId);
+  const email = (matchProfile?.email || matchSeeded?.email || '').trim().toLowerCase();
+
+  if (email === ADMIN_EMAIL) return false;
+
+  const deleted = getDeletedAgentRecords();
+  const nextIds = Array.from(new Set([...deleted.ids, targetId]));
+  const nextEmails = email ? Array.from(new Set([...deleted.emails, email])) : deleted.emails;
+  localStorage.setItem(
+    DELETED_AGENTS_KEY,
+    JSON.stringify({ ids: nextIds, emails: nextEmails })
+  );
+
+  const remainingProfiles = profiles.filter(
+    (p) => p.id !== targetId && p.uid !== targetId && p.email?.toLowerCase() !== email
+  );
+  localStorage.setItem('offline_db_profiles', JSON.stringify(remainingProfiles));
+
+  try {
+    const apps: any[] = JSON.parse(localStorage.getItem('offline_db_partner_applications') || '[]');
+    const remainingApps = apps.filter(
+      (a) => a.userId !== targetId && (!email || a.userEmail?.toLowerCase() !== email)
+    );
+    localStorage.setItem('offline_db_partner_applications', JSON.stringify(remainingApps));
+  } catch {
+    // Safe ignore
+  }
+
+  if (removeListings) {
+    const remainingProps = getProperties().filter(
+      (prop) => prop.agentId !== targetId && prop.ownerId !== targetId
+    );
+    savePropertiesSafely(remainingProps);
+  }
+
+  emitDataUpdate();
+  return true;
 }
 
 export function getDefaultPermissionsForPlan(plan: SubscriptionPlan): UserPermissions {

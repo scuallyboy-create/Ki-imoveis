@@ -7,6 +7,7 @@ import { Icons } from '../components/ui/Icons';
 import { cn } from '../lib/utils';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { DATA_UPDATED_EVENT, getPlanCatalog } from '../lib/dataService';
+import { ADMIN_EMAIL } from '../constants';
 import { useAuth } from '../hooks/useAuth';
 import { useToast } from '../components/ui/Toast';
 import { PlanCatalogItem, SubscriptionPlan } from '../types';
@@ -20,11 +21,16 @@ export default function Home() {
   const { showToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
+  const isRootAdmin = user?.email?.toLowerCase() === ADMIN_EMAIL || user?.role === 'admin';
 
   useEffect(() => {
     const syncCatalog = () => setPlanCatalog(getPlanCatalog());
     window.addEventListener(DATA_UPDATED_EVENT, syncCatalog);
-    return () => window.removeEventListener(DATA_UPDATED_EVENT, syncCatalog);
+    window.addEventListener('storage', syncCatalog);
+    return () => {
+      window.removeEventListener(DATA_UPDATED_EVENT, syncCatalog);
+      window.removeEventListener('storage', syncCatalog);
+    };
   }, []);
 
   useEffect(() => {
@@ -113,6 +119,7 @@ export default function Home() {
           </div>
           <PropertyGrid
             category={selectedCategory}
+            featuredFirst={selectedCategory === 'all'}
             limit={8}
             onResetFilters={() => setSelectedCategory('all')}
           />
@@ -194,19 +201,40 @@ export default function Home() {
 
         {/* Pricing Plans Section */}
         <section className="mt-28 px-4 sm:px-8 py-16 bg-gray-100/80 border border-gray-200 rounded-[40px] scroll-mt-24" id="pricing">
-          <div className="max-w-3xl mx-auto text-center mb-14">
-            <h2 className="text-3xl md:text-4xl font-extrabold mb-3 text-gray-900">
+          <div className="max-w-3xl mx-auto text-center mb-14 space-y-3">
+            <h2 className="text-3xl md:text-4xl font-extrabold text-gray-900">
               Planos e Pacotes
             </h2>
             <p className="text-gray-600">
               Torne-se um Agente Verificado com licença aprovada pela administração e impulsione os seus negócios.
             </p>
+            {isRootAdmin && (
+              <div className="pt-1">
+                <Link
+                  to="/dashboard?tab=admin&section=packages"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-xs font-semibold hover:bg-brand-primary transition-colors"
+                >
+                  <Icons.Edit3 size={14} />
+                  <span>Gerir Informações, Preços & Pacotes</span>
+                </Link>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-6xl mx-auto">
             {(['free', 'silver', 'gold'] as SubscriptionPlan[]).map((planKey) => {
               const plan = planCatalog[planKey];
-              const highlight = planKey === 'silver';
+              const highlight = plan.highlighted ?? planKey === 'silver';
+              const badgeLabel = plan.badgeText ?? (planKey === 'silver' ? 'Mais Popular' : '');
+              const periodLabel =
+                plan.billingPeriod !== undefined
+                  ? plan.billingPeriod
+                  : plan.priceAOA > 0
+                  ? '/mês'
+                  : '';
+              const ctaText =
+                plan.ctaLabel?.trim() ||
+                (plan.priceAOA === 0 ? `Começar ${plan.name}` : `Escolher ${plan.name}`);
               const isCurrent = user?.subscriptionPlan === planKey && user?.licenseStatus === 'active';
               return (
                 <div
@@ -216,19 +244,32 @@ export default function Home() {
                     highlight ? 'border-brand-primary ring-2 ring-brand-primary/15' : 'border-gray-200'
                   )}
                 >
-                  {highlight && (
-                    <span className="self-start mb-3 text-[11px] font-bold text-brand-primary uppercase tracking-wider">
-                      Mais Popular
-                    </span>
-                  )}
+                  <div className="flex items-center justify-between gap-2 min-h-[24px] mb-2">
+                    {badgeLabel ? (
+                      <span className="text-[11px] font-bold text-brand-primary uppercase tracking-wider">
+                        {badgeLabel}
+                      </span>
+                    ) : (
+                      <span />
+                    )}
+                    {isRootAdmin && (
+                      <Link
+                        to={`/dashboard?tab=admin&section=packages&editPlan=${planKey}`}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-500 hover:text-brand-primary transition-colors"
+                      >
+                        <Icons.Edit3 size={12} />
+                        <span>Editar</span>
+                      </Link>
+                    )}
+                  </div>
                   <h3 className="text-2xl font-bold mb-1 text-gray-900">{plan.name}</h3>
                   <p className="text-xs text-gray-500 mb-6">{plan.description}</p>
                   <div className="flex items-baseline gap-1 mb-6">
                     <span className="text-3xl font-extrabold text-brand-dark tabular-nums">
                       {plan.priceLabel}
                     </span>
-                    {plan.priceAOA > 0 && (
-                      <span className="text-sm text-gray-400 font-semibold">/mês</span>
+                    {periodLabel && (
+                      <span className="text-sm text-gray-400 font-semibold">{periodLabel}</span>
                     )}
                   </div>
                   <ul className="space-y-3 mb-8 flex-1">
@@ -251,11 +292,7 @@ export default function Home() {
                         : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
                     )}
                   >
-                    {isCurrent
-                      ? 'Plano Ativo'
-                      : plan.priceAOA === 0
-                      ? `Começar ${plan.name}`
-                      : `Escolher ${plan.name}`}
+                    {isCurrent ? 'Plano Ativo' : ctaText}
                   </button>
                 </div>
               );

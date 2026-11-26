@@ -9,7 +9,12 @@ import {
 } from '../lib/supabase';
 import { User } from '@supabase/supabase-js';
 import { ADMIN_EMAIL, ADMIN_MANAGEMENT_PERMISSIONS } from '../constants';
-import { DATA_UPDATED_EVENT, emitDataUpdate, getDefaultPermissionsForPlan } from '../lib/dataService';
+import {
+  DATA_UPDATED_EVENT,
+  emitDataUpdate,
+  getDefaultPermissionsForPlan,
+  isAccountDeleted,
+} from '../lib/dataService';
 
 interface AuthContextType {
   user: UserProfile | null;
@@ -133,6 +138,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const fetchProfile = useCallback(
     async (uid: string, sbUser: User) => {
+      const sbEmailLower = (sbUser.email || '').trim().toLowerCase();
+      if (isAccountDeleted(uid, sbEmailLower)) {
+        clearAllBrowserAuthSessions();
+        setUser(null);
+        return;
+      }
+
       try {
         const { data: profile } = await supabase
           .from('profiles')
@@ -140,16 +152,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           .eq('id', uid)
           .single();
 
-        const sbEmailLower = (sbUser.email || '').trim().toLowerCase();
         const profEmailLower = (profile?.email || '').trim().toLowerCase();
 
         if (profile && (!sbEmailLower || !profEmailLower || profEmailLower === sbEmailLower)) {
+          if (profile.licenseStatus === 'blocked' && sbEmailLower !== ADMIN_EMAIL) {
+            clearAllBrowserAuthSessions();
+            setUser(null);
+            return;
+          }
           setUser(normalizeUser(uid, sbUser, profile));
         } else {
-          setUser(syncLocalProfile(uid, sbUser));
+          const synced = syncLocalProfile(uid, sbUser);
+          if (synced.licenseStatus === 'blocked' && sbEmailLower !== ADMIN_EMAIL) {
+            clearAllBrowserAuthSessions();
+            setUser(null);
+            return;
+          }
+          setUser(synced);
         }
       } catch {
-        setUser(syncLocalProfile(uid, sbUser));
+        const synced = syncLocalProfile(uid, sbUser);
+        if (synced.licenseStatus === 'blocked' && sbEmailLower !== ADMIN_EMAIL) {
+          clearAllBrowserAuthSessions();
+          setUser(null);
+          return;
+        }
+        setUser(synced);
       }
     },
     [normalizeUser, syncLocalProfile]
@@ -158,14 +186,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refreshProfile = useCallback(() => {
     setUser((prev) => {
       if (!prev) return prev;
-      const profiles = readLocalProfiles();
       const prevEmailLower = (prev.email || '').trim().toLowerCase();
+      if (isAccountDeleted(prev.uid, prevEmailLower)) {
+        clearAllBrowserAuthSessions();
+        return null;
+      }
+      const profiles = readLocalProfiles();
       const match = profiles.find((p) => {
         const pEmail = (p.email || '').trim().toLowerCase();
         if (prevEmailLower && pEmail) return pEmail === prevEmailLower;
         return p.id === prev.uid;
       });
       if (!match) return prev;
+      if (match.licenseStatus === 'blocked' && prevEmailLower !== ADMIN_EMAIL) {
+        clearAllBrowserAuthSessions();
+        return null;
+      }
       const isAdmin = prevEmailLower === ADMIN_EMAIL;
       return {
         ...prev,
@@ -226,6 +262,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signIn = async (email: string, password: string) => {
     const cleanEmail = email.trim();
+    const cleanEmailLower = cleanEmail.toLowerCase();
+
+    if (isAccountDeleted(undefined, cleanEmailLower)) {
+      throw new Error('Esta conta foi eliminada pela administração Ki-Imóveis.');
+    }
+
+    const preProfiles = readLocalProfiles();
+    const preMatch = preProfiles.find((p) => p.email?.toLowerCase() === cleanEmailLower);
+    if (preMatch?.licenseStatus === 'blocked' && cleanEmailLower !== ADMIN_EMAIL) {
+      throw new Error('Esta conta foi bloqueada pela administração Ki-Imóveis.');
+    }
+
     clearAllBrowserAuthSessions();
 
     const { data, error } = await supabase.auth.signInWithPassword({
@@ -237,13 +285,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Handle local preview login for accounts created when Supabase requires email confirmation
       const profiles = readLocalProfiles();
       const matchedProfile = profiles.find(
-        (p) => p.email?.toLowerCase() === cleanEmail.toLowerCase()
+        (p) => p.email?.toLowerCase() === cleanEmailLower
       );
       if (
         matchedProfile &&
         (error.message?.toLowerCase().includes('email not confirmed') ||
           error.message?.toLowerCase().includes('invalid login credentials'))
       ) {
+        if (matchedProfile.licenseStatus === 'blocked' && cleanEmailLower !== ADMIN_EMAIL) {
+          throw new Error('Esta conta foi bloqueada pela administração Ki-Imóveis.');
+        }
         const check = await verifyLocalCredential(cleanEmail, password);
         if (check === 'ok') {
           const localSession = buildLocalSessionForProfile(matchedProfile);
@@ -268,8 +319,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     metadata: any = {}
   ): Promise<{ autoSignedIn: boolean }> => {
     const cleanEmail = email.trim();
-    if (cleanEmail.toLowerCase() === ADMIN_EMAIL) {
+    const cleanEmailLower = cleanEmail.toLowerCase();
+    if (cleanEmailLower === ADMIN_EMAIL) {
       throw new Error('Esta conta é reservada exclusivamente à administração.');
+    }
+    if (isAccountDeleted(undefined, cleanEmailLower)) {
+      throw new Error('Esta conta foi eliminada pela administração Ki-Imóveis.');
+    }
+    const existingLocal = readLocalProfiles().find(
+      (p) => p.email?.toLowerCase() === cleanEmailLower
+    );
+    if (existingLocal) {
+      throw new Error('User already registered');
     }
 
     // Crucial: Clear any active session (e.g. scuallyboy@gmail.com) BEFORE creating the new account
@@ -300,9 +361,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
     });
 
-    if (authError) throw authError;
+    const isRateLimited =
+      Boolean(authError) &&
+      ((authError as any)?.status === 429 ||
+        authError?.message?.toLowerCase().includes('rate limit'));
 
-    const uid = authData.user?.id || 'user-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+    if (authError && !isRateLimited) throw authError;
+
+    const uid =
+      (!isRateLimited ? authData.user?.id : undefined) ||
+      'user-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
     const newProfile = {
       id: uid,
       email: cleanEmail,
@@ -331,7 +399,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Establish active session strictly for the newly created account (never the old user)
-    if (authData.session && authData.user) {
+    if (!isRateLimited && authData.session && authData.user) {
       setUser(normalizeUser(uid, authData.user, newProfile));
     } else {
       const localSession = buildLocalSessionForProfile(newProfile);
